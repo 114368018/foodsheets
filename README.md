@@ -21,6 +21,21 @@ npm run dev
 npm run build
 ```
 
+## Firebase 雲端同步設定（跨裝置）
+
+1. 在 Firebase 建立專案並啟用 Firestore Database。
+2. 複製 `.env.example` 為 `.env`，填入 Firebase Web App 設定值。
+3. 重新啟動開發伺服器。
+
+```bash
+cp .env.example .env
+npm run dev
+```
+
+4. 預設會同步到 `projects/{VITE_FIREBASE_PROJECT_DOC_ID}`，可在 `.env` 改成你想要的專案代號。
+
+若未設定 Firebase，系統會自動退回本機 `localStorage` 模式。
+
 ## 目前狀態
 
 - 已完成專案腳手架初始化
