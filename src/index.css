@@ -180,6 +180,62 @@ h2 {
   margin-top: 8px;
 }
 
+.hard-reset-entry {
+  margin-top: 10px;
+}
+
+.tiny-danger-trigger {
+  width: 100%;
+  font-size: 12px !important;
+  opacity: 0.75;
+}
+
+.tiny-danger-trigger:hover {
+  opacity: 1;
+}
+
+.hard-reset-panel {
+  margin-top: 8px;
+  border: 1px dashed #ef4444;
+  background: #fff1f2;
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hard-reset-title {
+  margin: 0;
+  color: #991b1b;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.hard-reset-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #7f1d1d;
+  text-align: left;
+}
+
+.hard-reset-check input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.hard-reset-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.hard-reset-actions button {
+  flex: 1;
+}
+
 .tabs {
   display: flex;
   gap: 8px;
@@ -427,6 +483,11 @@ button {
 
 button:hover {
   background-color: var(--primary-hover);
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .btn-danger {

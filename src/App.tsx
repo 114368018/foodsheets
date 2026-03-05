@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { doc, onSnapshot, setDoc } from 'firebase/firestore'
+import { deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore'
 import { INGREDIENT_LIBRARY_SEED } from './ingredient-library'
 import { TOOL_LIBRARY_SEED } from './tool-library'
 import { CHANGELOG_ENTRIES } from './changelog'
@@ -19,6 +19,7 @@ const CHANGELOG_TAB = '版本日誌' as const
 const SHOPPING_LIST_TAB = '食材採買' as const
 const ADMIN_PASSCODE = 'admin'
 const STORAGE_KEY = 'foodsheets.v1.state'
+const RESET_CONFIRM_PHRASE = '全部歸零'
 const CLOUDINARY_CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME
 const CLOUDINARY_UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET
 const isCloudinaryConfigured = Boolean(CLOUDINARY_CLOUD_NAME && CLOUDINARY_UPLOAD_PRESET)
@@ -872,6 +873,56 @@ const deleteCloudinaryByPublicId = async (publicId: string): Promise<{ ok: boole
   }
 }
 
+const collectCloudinaryPublicIds = (data: Record<GroupTab, GroupData>): string[] => {
+  const ids = new Set<string>()
+
+  GROUP_TABS.forEach((groupName) => {
+    data[groupName].dishes.forEach((dish) => {
+      dish.images.forEach((image) => {
+        const fromField = image.publicId?.trim()
+        if (fromField) {
+          ids.add(fromField)
+          return
+        }
+
+        const fromUrl = extractPublicIdFromCloudinaryUrl(image.url)
+        if (fromUrl) {
+          ids.add(fromUrl)
+        }
+      })
+    })
+  })
+
+  return Array.from(ids)
+}
+
+const deleteCloudinaryAssetsForReset = async (
+  groupDataForDelete: Record<GroupTab, GroupData>,
+): Promise<{ ok: boolean; message?: string }> => {
+  const publicIds = collectCloudinaryPublicIds(groupDataForDelete)
+  const response = await fetch('/api/cloudinary-delete-all', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      prefix: `foodsheets/${firebaseProjectDocId}`,
+      publicIds,
+    }),
+  })
+
+  if (response.ok) {
+    return { ok: true }
+  }
+
+  try {
+    const payload = (await response.json()) as { error?: string }
+    return { ok: false, message: payload.error ?? `HTTP ${response.status}` }
+  } catch {
+    return { ok: false, message: `HTTP ${response.status}` }
+  }
+}
+
 const loadPersistedState = (): PersistedState | null => {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY)
@@ -924,6 +975,12 @@ function App() {
   const [adminUnlocked, setAdminUnlocked] = useState(false)
   const [adminPasscode, setAdminPasscode] = useState('')
   const [adminError, setAdminError] = useState('')
+  const [showHardResetPanel, setShowHardResetPanel] = useState(false)
+  const [resetConfirmPhrase, setResetConfirmPhrase] = useState('')
+  const [resetConfirmPasscode, setResetConfirmPasscode] = useState('')
+  const [resetAcknowledged, setResetAcknowledged] = useState(false)
+  const [resetError, setResetError] = useState('')
+  const [resetCooldownSeconds, setResetCooldownSeconds] = useState(0)
   const [ingredientAdjustments, setIngredientAdjustments] = useState<Record<string, string>>(
     persistedState?.ingredientAdjustments ?? {},
   )
@@ -962,6 +1019,7 @@ function App() {
   const remoteLoadedRef = useRef(false)
   const pendingRemovedImageUrlsRef = useRef<Set<string>>(new Set())
   const thumbnailInFlightRef = useRef<Set<string>>(new Set())
+  const dangerHoldTimerRef = useRef<number | null>(null)
 
   const activeGroup: GroupTab = GROUP_TABS.includes(currentTab as GroupTab)
     ? (currentTab as GroupTab)
@@ -1471,6 +1529,122 @@ function App() {
     setAdminUnlocked(false)
     setAdminPasscode('')
     setAdminError('')
+    setShowHardResetPanel(false)
+    setResetConfirmPhrase('')
+    setResetConfirmPasscode('')
+    setResetAcknowledged(false)
+    setResetError('')
+    setResetCooldownSeconds(0)
+  }
+
+  const startDangerHold = () => {
+    if (!adminUnlocked || showHardResetPanel || dangerHoldTimerRef.current) {
+      return
+    }
+
+    setResetError('')
+    dangerHoldTimerRef.current = window.setTimeout(() => {
+      setShowHardResetPanel(true)
+      setResetCooldownSeconds(5)
+      dangerHoldTimerRef.current = null
+    }, 3000)
+  }
+
+  const cancelDangerHold = () => {
+    if (!dangerHoldTimerRef.current) {
+      return
+    }
+
+    window.clearTimeout(dangerHoldTimerRef.current)
+    dangerHoldTimerRef.current = null
+  }
+
+  const closeHardResetPanel = () => {
+    setShowHardResetPanel(false)
+    setResetConfirmPhrase('')
+    setResetConfirmPasscode('')
+    setResetAcknowledged(false)
+    setResetError('')
+    setResetCooldownSeconds(0)
+  }
+
+  const executeHardReset = async () => {
+    if (!adminUnlocked) {
+      setResetError('僅管理員可執行此操作。')
+      return
+    }
+
+    if (resetCooldownSeconds > 0) {
+      setResetError(`請再等待 ${resetCooldownSeconds} 秒後才能執行。`)
+      return
+    }
+
+    if (resetConfirmPasscode !== ADMIN_PASSCODE) {
+      setResetError('管理員密碼驗證失敗。')
+      return
+    }
+
+    if (resetConfirmPhrase.trim() !== RESET_CONFIRM_PHRASE) {
+      setResetError(`請輸入正確確認字串：${RESET_CONFIRM_PHRASE}`)
+      return
+    }
+
+    if (!resetAcknowledged) {
+      setResetError('請先勾選風險確認。')
+      return
+    }
+
+    const confirmed = window.confirm('最後確認：此操作會刪除所有組別資料、食材庫調整與採買資料，且無法復原。')
+    if (!confirmed) {
+      return
+    }
+
+    setResetError('')
+
+    if (isCloudinaryConfigured) {
+      const deleteResult = await deleteCloudinaryAssetsForReset(groupData)
+      if (!deleteResult.ok) {
+        setResetError(`Cloudinary 全刪除失敗：${deleteResult.message ?? '請確認 API 與伺服器金鑰設定'}`)
+        return
+      }
+    }
+
+    if (isFirebaseConfigured && db) {
+      try {
+        const projectRef = doc(db, 'projects', firebaseProjectDocId)
+        await deleteDoc(projectRef)
+      } catch {
+        setResetError('Firestore 刪除失敗，已中止歸零，請稍後重試。')
+        return
+      }
+    }
+
+    const freshGroupData = createInitialGroupData()
+    const freshIngredientLibrary = normalizeIngredientLibrary(INGREDIENT_LIBRARY_SEED)
+
+    setCurrentTab('第一組')
+    setGroupData(freshGroupData)
+    setGroupCollapseState(createInitialCollapseState(freshGroupData))
+    setIngredientAdjustments({})
+    setToolAdjustments({})
+    setIngredientLibrary(freshIngredientLibrary)
+    setPreparedSummaryIngredients({})
+    setPreparedGroupIngredients({})
+    setPreparedGroupTools({})
+    setShoppingStores([])
+    setLibraryInput('')
+    setLibraryError('')
+    setUploadingDishIds({})
+    setUploadProgressByDish({})
+    setResolvedThumbnailByUrl({})
+    setThumbnailFetchFailedByUrl({})
+    setImageUploadError('')
+    pendingRemovedImageUrlsRef.current.clear()
+    window.localStorage.removeItem(STORAGE_KEY)
+
+    setSyncStatus('已完成本機 + Firestore + Cloudinary 全部歸零')
+
+    closeHardResetPanel()
   }
 
   const addLibraryIngredient = () => {
@@ -1682,6 +1856,26 @@ function App() {
     shoppingStores,
   ])
 
+  useEffect(() => {
+    if (resetCooldownSeconds <= 0) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setResetCooldownSeconds((previous) => Math.max(previous - 1, 0))
+    }, 1000)
+
+    return () => window.clearTimeout(timer)
+  }, [resetCooldownSeconds])
+
+  useEffect(() => {
+    return () => {
+      if (dangerHoldTimerRef.current) {
+        window.clearTimeout(dangerHoldTimerRef.current)
+      }
+    }
+  }, [])
+
   // --- Shopping List Functions ---
   const addShoppingStore = () => {
     setShoppingStores((prev) => [
@@ -1775,6 +1969,63 @@ function App() {
             </div>
           )}
           {adminError && <p className="error admin-error">{adminError}</p>}
+          {adminUnlocked && (
+            <div className="hard-reset-entry">
+              {!showHardResetPanel ? (
+                <button
+                  type="button"
+                  className="btn-danger-outline tiny-danger-trigger"
+                  onMouseDown={startDangerHold}
+                  onMouseUp={cancelDangerHold}
+                  onMouseLeave={cancelDangerHold}
+                  onTouchStart={startDangerHold}
+                  onTouchEnd={cancelDangerHold}
+                >
+                  長按 3 秒刪除所有資料
+                </button>
+              ) : (
+                <div className="hard-reset-panel">
+                  <p className="hard-reset-title">高風險：全資料歸零</p>
+                  <p className="hint">需要同時通過密碼、確認字串、風險勾選，且倒數結束後才可執行。</p>
+                  <input
+                    type="password"
+                    placeholder="再次輸入管理員密碼"
+                    value={resetConfirmPasscode}
+                    onChange={(event) => setResetConfirmPasscode(event.target.value)}
+                  />
+                  <input
+                    placeholder={`請輸入確認字串：${RESET_CONFIRM_PHRASE}`}
+                    value={resetConfirmPhrase}
+                    onChange={(event) => setResetConfirmPhrase(event.target.value)}
+                  />
+                  <label className="hard-reset-check">
+                    <input
+                      type="checkbox"
+                      checked={resetAcknowledged}
+                      onChange={(event) => setResetAcknowledged(event.target.checked)}
+                    />
+                    我確認這會清空全部資料且無法復原
+                  </label>
+                  <div className="hard-reset-actions">
+                    <button
+                      type="button"
+                      className="btn-danger"
+                      onClick={() => {
+                        void executeHardReset()
+                      }}
+                      disabled={resetCooldownSeconds > 0}
+                    >
+                      {resetCooldownSeconds > 0 ? `請等待 ${resetCooldownSeconds} 秒` : '執行全歸零'}
+                    </button>
+                    <button type="button" className="btn-secondary" onClick={closeHardResetPanel}>
+                      取消
+                    </button>
+                  </div>
+                  {resetError && <p className="error admin-error">{resetError}</p>}
+                </div>
+              )}
+            </div>
+          )}
         </section>
       </header>
 

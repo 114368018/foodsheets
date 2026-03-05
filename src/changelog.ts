@@ -5,6 +5,11 @@ export type ChangelogEntry = {
 }
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+{
+    version: 'v2.0.0',
+    date: '2026-03-06',
+    changes: ['正式版本發布，加入所有資料刪除功能，並清空現有資料。'],
+  },
   {
     version: 'v1.8.0',
     date: '2026-03-06',
