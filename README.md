@@ -21,20 +21,26 @@ npm run dev
 npm run build
 ```
 
-## Firebase 雲端同步設定（跨裝置）
+## 雲端同步與圖片設定（跨裝置）
 
-1. 在 Firebase 建立專案並啟用 Firestore Database。
-2. 複製 `.env.example` 為 `.env`，填入 Firebase Web App 設定值。
-3. 重新啟動開發伺服器。
+1. 在 Firebase 建立專案並啟用 Firestore Database（用來同步文字資料）。
+2. 在 Cloudinary 建立帳號，建立一個 `Unsigned` Upload Preset（用來上傳圖片）。
+	前端只需要 `cloud_name` 與 `upload_preset`，不要把 `api_secret` 放進 `.env`。
+3. 複製 `.env.example` 為 `.env`，填入 Firebase 與 Cloudinary 設定值。
+4. 重新啟動開發伺服器。
 
 ```bash
 cp .env.example .env
 npm run dev
 ```
 
-4. 預設會同步到 `projects/{VITE_FIREBASE_PROJECT_DOC_ID}`，可在 `.env` 改成你想要的專案代號。
+5. 預設會同步到 `projects/{VITE_FIREBASE_PROJECT_DOC_ID}`，可在 `.env` 改成你想要的專案代號。
+6. 圖片會上傳到 Cloudinary，並把圖片 URL 存進 Firestore。
+7. 若要啟用「刪除圖片時同步刪除 Cloudinary」，請在 Vercel 專案環境變數新增：
+	`CLOUDINARY_CLOUD_NAME`、`CLOUDINARY_API_KEY`、`CLOUDINARY_API_SECRET`（這三個是 server-only，不可加 `VITE_` 前綴）。
 
-若未設定 Firebase，系統會自動退回本機 `localStorage` 模式。
+若未設定 Firebase，系統會自動退回本機 `localStorage` 模式；若未設定 Cloudinary，圖片上傳功能會停用並顯示提示。
+若未設定上述 server-only Cloudinary 變數，按刪除時仍會從表單移除圖片，但不會同步刪除 Cloudinary 檔案。
 
 ## 目前狀態
 
