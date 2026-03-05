@@ -287,6 +287,7 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
 const mergeRemoteWithLocalImages = (
   remote: Record<GroupTab, GroupData>,
   local: Record<GroupTab, GroupData>,
+  pendingRemovedImageUrls: Set<string>,
 ): Record<GroupTab, GroupData> => {
   const merged = { ...remote }
 
@@ -306,15 +307,21 @@ const mergeRemoteWithLocalImages = (
             }
           })
 
+          const filteredImages = mergedImages.filter((image) => !pendingRemovedImageUrls.has(image.url))
+
           return {
             ...remoteDish,
-            images: uniqueDishImages(mergedImages).slice(0, 2),
+            images: uniqueDishImages(filteredImages).slice(0, 2),
           }
         }
 
+        const filteredLocalImages = (localDish?.images ?? []).filter(
+          (image) => !pendingRemovedImageUrls.has(image.url),
+        )
+
         return {
           ...remoteDish,
-          images: uniqueDishImages(localDish?.images ?? []).slice(0, 2),
+          images: uniqueDishImages(filteredLocalImages).slice(0, 2),
         }
       }),
     }
@@ -629,6 +636,7 @@ function App() {
 
   const applyingRemoteRef = useRef(false)
   const remoteLoadedRef = useRef(false)
+  const pendingRemovedImageUrlsRef = useRef<Set<string>>(new Set())
 
   const activeGroup: GroupTab = GROUP_TABS.includes(currentTab as GroupTab)
     ? (currentTab as GroupTab)
@@ -917,6 +925,10 @@ function App() {
     const targetImage =
       groupData[groupName].dishes.find((dish) => dish.id === dishId)?.images[imageIndex] ?? null
 
+    if (targetImage?.url) {
+      pendingRemovedImageUrlsRef.current.add(targetImage.url)
+    }
+
     setGroupData((previous) => ({
       ...previous,
       [groupName]: {
@@ -1028,7 +1040,11 @@ function App() {
         applyingRemoteRef.current = true
         setCurrentTab(isValidTab(data.currentTab) ? data.currentTab : '第一組')
         setGroupData((previous) =>
-          mergeRemoteWithLocalImages(normalizeGroupData(data.groupData), previous),
+          mergeRemoteWithLocalImages(
+            normalizeGroupData(data.groupData),
+            previous,
+            pendingRemovedImageUrlsRef.current,
+          ),
         )
         setIngredientAdjustments(data.ingredientAdjustments ?? {})
         setToolAdjustments(data.toolAdjustments ?? {})
@@ -1121,7 +1137,7 @@ function App() {
 
             return (
               <section key={`input-${dish.id}`} className="panel">
-                <h2>{dish.title.trim()}</h2>
+                <h2>{`料理${dishIndex + 1}`}</h2>
 
                 <article className="dish-card">
                   <label>
