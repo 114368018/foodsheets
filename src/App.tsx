@@ -114,6 +114,20 @@ const emptyDish = (id: number): Dish => ({
   images: [],
 })
 
+const normalizeDishTitle = (title: unknown): string => {
+  if (typeof title !== 'string') {
+    return ''
+  }
+
+  const trimmed = title.trim()
+  // Migrate legacy placeholder titles like "料理1"/"料理2"/"料理3" back to empty.
+  if (/^料理[1-3]$/.test(trimmed)) {
+    return ''
+  }
+
+  return title
+}
+
 const normalizeDishImage = (value: unknown): DishImage | null => {
   if (typeof value === 'string') {
     const url = value.trim()
@@ -214,7 +228,7 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
           const dishObj = (dish ?? {}) as Record<string, unknown>
           return {
             id: Number(dishObj.id) || groupOffset + 201 + dishIndex,
-            title: typeof dishObj.title === 'string' ? dishObj.title : '',
+            title: normalizeDishTitle(dishObj.title),
             videoUrl: typeof dishObj.videoUrl === 'string' ? dishObj.videoUrl : '',
             images: Array.isArray(dishObj.images)
               ? uniqueDishImages(dishObj.images.map(normalizeDishImage).filter((value): value is DishImage => Boolean(value))).slice(0, 2)
@@ -1056,7 +1070,7 @@ function App() {
 
   return (
     <main className="page">
-      <h1>料理採購管理</h1>
+      <h1>聖誕趴-廚藝競賽</h1>
       <p className="hint">{syncStatus}</p>
       {imageUploadError && <p className="error">{imageUploadError}</p>}
 
