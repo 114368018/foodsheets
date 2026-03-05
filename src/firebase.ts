@@ -11,8 +11,18 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 }
 
+const requiredFirebaseEnvMap = {
+  VITE_FIREBASE_API_KEY: firebaseConfig.apiKey,
+  VITE_FIREBASE_PROJECT_ID: firebaseConfig.projectId,
+  VITE_FIREBASE_APP_ID: firebaseConfig.appId,
+} as const
+
+export const missingFirebaseEnvKeys = Object.entries(requiredFirebaseEnvMap)
+  .filter(([, value]) => !value)
+  .map(([key]) => key)
+
 const hasRequiredFirebaseConfig = Boolean(
-  firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.appId,
+  missingFirebaseEnvKeys.length === 0,
 )
 
 const app = hasRequiredFirebaseConfig ? initializeApp(firebaseConfig) : null

@@ -4,6 +4,7 @@ import {
   db,
   firebaseProjectDocId,
   isFirebaseConfigured,
+  missingFirebaseEnvKeys,
 } from './firebase'
 
 const GROUP_TABS = ['第一組', '第二組', '第三組', '第四組', '第五組', '第六組', '學長姐組'] as const
@@ -598,7 +599,9 @@ function App() {
   const [uploadProgressByDish, setUploadProgressByDish] = useState<Record<number, number>>({})
   const [imageUploadError, setImageUploadError] = useState('')
   const [syncStatus, setSyncStatus] = useState(
-    isFirebaseConfigured ? 'Firebase 已設定，雲端同步初始化中…' : '尚未設定 Firebase，目前僅本機保存',
+    isFirebaseConfigured
+      ? 'Firebase 已設定，雲端同步初始化中…'
+      : `尚未設定 Firebase，目前僅本機保存（缺少：${missingFirebaseEnvKeys.join(', ')}）`,
   )
 
   const applyingRemoteRef = useRef(false)
