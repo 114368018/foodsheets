@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { doc, onSnapshot, setDoc } from 'firebase/firestore'
+import { INGREDIENT_LIBRARY_SEED } from './ingredient-library'
+import { TOOL_LIBRARY_SEED } from './tool-library'
+import { CHANGELOG_ENTRIES } from './changelog'
 import {
   db,
   firebaseProjectDocId,
@@ -7,16 +10,41 @@ import {
   missingFirebaseEnvKeys,
 } from './firebase'
 
-const GROUP_TABS = ['第一組', '第二組', '第三組', '第四組', '第五組', '第六組', '學長姐組'] as const
+const GROUP_TABS = ['第一組', '第二組', '第三組', '第四組', '第五組', '第六組', '第七組', '學長姐組'] as const
 const SUMMARY_TABS = ['食材總表', '工具總表'] as const
-const SUMMARY_EDIT_PASSCODE = 'foodsheets-admin'
+const INGREDIENT_LIBRARY_TAB = '食材庫' as const
+const GROUP_INGREDIENT_LIBRARY_TAB = '各組食材表' as const
+const GROUP_TOOL_LIBRARY_TAB = '各組工具表' as const
+const CHANGELOG_TAB = '版本日誌' as const
+const SHOPPING_LIST_TAB = '食材採買' as const
+const ADMIN_PASSCODE = 'admin'
 const STORAGE_KEY = 'foodsheets.v1.state'
 const CLOUDINARY_CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME
 const CLOUDINARY_UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET
 const isCloudinaryConfigured = Boolean(CLOUDINARY_CLOUD_NAME && CLOUDINARY_UPLOAD_PRESET)
 
 type GroupTab = (typeof GROUP_TABS)[number]
-type TabName = GroupTab | (typeof SUMMARY_TABS)[number]
+type TabName =
+  | GroupTab
+  | (typeof SUMMARY_TABS)[number]
+  | typeof INGREDIENT_LIBRARY_TAB
+  | typeof GROUP_INGREDIENT_LIBRARY_TAB
+  | typeof GROUP_TOOL_LIBRARY_TAB
+  | typeof CHANGELOG_TAB
+  | typeof SHOPPING_LIST_TAB
+
+type ShoppingStoreItem = {
+  id: number
+  ingredient: string
+  price: string
+  purchased?: boolean
+}
+
+type ShoppingStore = {
+  id: number
+  storeName: string
+  items: ShoppingStoreItem[]
+}
 
 type IngredientRow = {
   id: number
@@ -53,6 +81,25 @@ type ToolSummaryRow = {
   sumQty: number
 }
 
+type GroupIngredientLibraryRow = {
+  id: number
+  dishName: string
+  ingredient: string
+  perServingQty: string
+  perServingUnit: string
+  totalQty: string
+  totalUnit: string
+  note: string
+}
+
+type GroupToolLibraryRow = {
+  id: number
+  tool: string
+  qty: string
+  unit: string
+  note: string
+}
+
 type GroupData = {
   teamName: string
   cuisineType: string
@@ -78,6 +125,41 @@ type PersistedState = {
   groupData: Record<GroupTab, GroupData>
   ingredientAdjustments: Record<string, string>
   toolAdjustments: Record<string, string>
+  ingredientLibrary: string[]
+  preparedSummaryIngredients: Record<string, boolean>
+  preparedGroupIngredients: Record<string, boolean>
+  preparedGroupTools: Record<string, boolean>
+  shoppingStores: ShoppingStore[]
+}
+
+type GroupCollapseState = {
+  dishCollapsedById: Record<number, boolean>
+  toolsCollapsed: boolean
+  groupIngredientTableCollapsed: boolean
+  groupToolTableCollapsed: boolean
+}
+
+const createInitialCollapseState = (
+  sourceData: Record<GroupTab, GroupData>,
+): Record<GroupTab, GroupCollapseState> => {
+  return GROUP_TABS.reduce(
+    (acc, groupName) => {
+      acc[groupName] = {
+        dishCollapsedById: sourceData[groupName].dishes.reduce(
+          (dishAcc, dish) => {
+            dishAcc[dish.id] = false
+            return dishAcc
+          },
+          {} as Record<number, boolean>,
+        ),
+        toolsCollapsed: false,
+        groupIngredientTableCollapsed: false,
+        groupToolTableCollapsed: false,
+      }
+      return acc
+    },
+    {} as Record<GroupTab, GroupCollapseState>,
+  )
 }
 
 const isValidTab = (value: unknown): value is TabName => {
@@ -85,7 +167,72 @@ const isValidTab = (value: unknown): value is TabName => {
     return false
   }
 
-  return [...GROUP_TABS, ...SUMMARY_TABS].includes(value as TabName)
+  return [
+    ...GROUP_TABS,
+    ...SUMMARY_TABS,
+    INGREDIENT_LIBRARY_TAB,
+    GROUP_INGREDIENT_LIBRARY_TAB,
+    GROUP_TOOL_LIBRARY_TAB,
+    CHANGELOG_TAB,
+    SHOPPING_LIST_TAB,
+  ].includes(value as TabName)
+}
+
+const normalizeIngredientLibrary = (input: unknown): string[] => {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  const unique = new Map<string, string>()
+
+  input.forEach((item) => {
+    if (typeof item !== 'string') {
+      return
+    }
+
+    const trimmed = item.trim()
+    if (!trimmed) {
+      return
+    }
+
+    const key = trimmed.toLowerCase()
+    if (!unique.has(key)) {
+      unique.set(key, trimmed)
+    }
+  })
+
+  return Array.from(unique.values()).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+}
+
+const normalizeIngredientLibraryWithSeed = (input: unknown): string[] => {
+  const values = Array.isArray(input) ? input : []
+  return normalizeIngredientLibrary([...INGREDIENT_LIBRARY_SEED, ...values])
+}
+
+const normalizeToolLibrary = (input: unknown): string[] => {
+  if (!Array.isArray(input)) {
+    return []
+  }
+
+  const unique = new Map<string, string>()
+
+  input.forEach((item) => {
+    if (typeof item !== 'string') {
+      return
+    }
+
+    const trimmed = item.trim()
+    if (!trimmed) {
+      return
+    }
+
+    const key = trimmed.toLowerCase()
+    if (!unique.has(key)) {
+      unique.set(key, trimmed)
+    }
+  })
+
+  return Array.from(unique.values()).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
 }
 
 const emptyIngredientRow = (id: number, dishId: number): IngredientRow => ({
@@ -183,6 +330,139 @@ const formatNumber = (value: number): string => {
   return Number.isInteger(value) ? String(value) : value.toFixed(2)
 }
 
+const normalizeUrlInput = (value: string): string => {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return ''
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed
+  }
+
+  if (/^www\./i.test(trimmed)) {
+    return `https://${trimmed}`
+  }
+
+  return trimmed
+}
+
+const toValidHttpUrl = (value: string): URL | null => {
+  const normalized = normalizeUrlInput(value)
+  if (!normalized) {
+    return null
+  }
+
+  try {
+    const parsed = new URL(normalized)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null
+    }
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+const getEmbeddablePreviewUrl = (urlValue: string): string | null => {
+  const parsed = toValidHttpUrl(urlValue)
+  if (!parsed) {
+    return null
+  }
+
+  const host = parsed.hostname.toLowerCase()
+
+  if (host.includes('youtube.com')) {
+    const videoId = parsed.searchParams.get('v')
+    if (videoId) {
+      return `https://www.youtube.com/embed/${videoId}`
+    }
+  }
+
+  if (host === 'youtu.be') {
+    const videoId = parsed.pathname.replace(/^\/+/, '')
+    if (videoId) {
+      return `https://www.youtube.com/embed/${videoId}`
+    }
+  }
+
+  if (host.includes('vimeo.com')) {
+    const segments = parsed.pathname.split('/').filter(Boolean)
+    const videoId = segments[segments.length - 1]
+    if (videoId && /^\d+$/.test(videoId)) {
+      return `https://player.vimeo.com/video/${videoId}`
+    }
+  }
+
+  return null
+}
+
+const isICookRecipeUrl = (parsed: URL): boolean => {
+  const host = parsed.hostname.toLowerCase()
+  return host.includes('icook.tw') && /^\/recipes\/\d+/.test(parsed.pathname)
+}
+
+const fetchRecipeThumbnailFromApi = async (
+  recipeUrl: string,
+  signal?: AbortSignal,
+): Promise<string | null> => {
+  try {
+    const response = await fetch(`/api/recipe-thumbnail?url=${encodeURIComponent(recipeUrl)}`, { signal })
+    if (!response.ok) {
+      return null
+    }
+
+    const payload = (await response.json()) as { thumbnailUrl?: unknown }
+    if (typeof payload.thumbnailUrl !== 'string') {
+      return null
+    }
+
+    const trimmed = payload.thumbnailUrl.trim()
+    return trimmed ? trimmed : null
+  } catch {
+    return null
+  }
+}
+
+const getThumbnailPreviewUrl = (
+  urlValue: string,
+  resolvedByUrl: Record<string, string>,
+  failedByUrl: Record<string, boolean>,
+): string | null => {
+  const parsed = toValidHttpUrl(urlValue)
+  if (!parsed) {
+    return null
+  }
+
+  const path = parsed.pathname
+  const normalizedUrl = parsed.toString()
+
+  if (resolvedByUrl[normalizedUrl]) {
+    return resolvedByUrl[normalizedUrl]
+  }
+
+  // For iCook links, use API-fetched metadata first; fallback to webpage thumbnail only on API failure.
+  if (isICookRecipeUrl(parsed)) {
+    const recipeId = path.match(/^\/recipes\/(\d+)/)?.[1]
+    const knownICookThumbnailById: Record<string, string> = {
+      '488525':
+        'https://imgproxy.icook.network/safe/rt:fit/w:1200/el:0/q:80/plain/http://tokyo-kitchen.icook.tw.s3.amazonaws.com/uploads/recipe/cover/488525/6730c04dba3d8d2d.jpg',
+    }
+
+    if (recipeId && knownICookThumbnailById[recipeId]) {
+      return knownICookThumbnailById[recipeId]
+    }
+
+    if (failedByUrl[normalizedUrl]) {
+      return null
+    }
+
+    return null
+  }
+
+  return null
+}
+
 const createInitialGroupData = (): Record<GroupTab, GroupData> => {
   return GROUP_TABS.reduce(
     (acc, groupName, index) => {
@@ -224,7 +504,7 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
     const sourceObj = source as Record<string, unknown>
 
     const normalizedDishes = Array.isArray(sourceObj.dishes)
-      ? sourceObj.dishes.slice(0, 3).map((dish, dishIndex) => {
+      ? sourceObj.dishes.map((dish, dishIndex) => {
           const dishObj = (dish ?? {}) as Record<string, unknown>
           return {
             id: Number(dishObj.id) || groupOffset + 201 + dishIndex,
@@ -292,10 +572,19 @@ const mergeRemoteWithLocalImages = (
   const merged = { ...remote }
 
   GROUP_TABS.forEach((groupName) => {
+    // We want to combine the full list of dishes (remote + local not in remote)
+    const remoteDishesMap = new Map(remote[groupName].dishes.map((r) => [r.id, r]))
+    const allDishes = [
+      ...remote[groupName].dishes,
+      ...(local[groupName]?.dishes.filter((localDish) => !remoteDishesMap.has(localDish.id)) ?? []),
+    ]
+
     merged[groupName] = {
       ...remote[groupName],
-      dishes: remote[groupName].dishes.map((remoteDish) => {
-        const localDish = local[groupName]?.dishes.find((dish) => dish.id === remoteDish.id)
+      dishes: allDishes.map((dishBase) => {
+        // Find matching dishes from both sides (some "remoteDish" might just be local-only now)
+        const remoteDish = remoteDishesMap.get(dishBase.id) || dishBase
+        const localDish = local[groupName]?.dishes.find((dish) => dish.id === dishBase.id)
 
         if (remoteDish.images.length > 0) {
           const localImagesByUrl = new Map((localDish?.images ?? []).map((image) => [image.url, image]))
@@ -604,6 +893,20 @@ const loadPersistedState = (): PersistedState | null => {
       groupData: normalizeGroupData(parsed.groupData),
       ingredientAdjustments: parsed.ingredientAdjustments ?? {},
       toolAdjustments: parsed.toolAdjustments ?? {},
+      ingredientLibrary: normalizeIngredientLibraryWithSeed(parsed.ingredientLibrary),
+      preparedSummaryIngredients:
+        parsed.preparedSummaryIngredients && typeof parsed.preparedSummaryIngredients === 'object'
+          ? parsed.preparedSummaryIngredients
+          : {},
+      preparedGroupIngredients:
+        parsed.preparedGroupIngredients && typeof parsed.preparedGroupIngredients === 'object'
+          ? parsed.preparedGroupIngredients
+          : {},
+      preparedGroupTools:
+        parsed.preparedGroupTools && typeof parsed.preparedGroupTools === 'object'
+          ? parsed.preparedGroupTools
+          : {},
+      shoppingStores: Array.isArray(parsed.shoppingStores) ? parsed.shoppingStores : [],
     }
   } catch {
     return null
@@ -612,21 +915,42 @@ const loadPersistedState = (): PersistedState | null => {
 
 function App() {
   const persistedState = useMemo(loadPersistedState, [])
+  const initialGroupData = persistedState?.groupData ?? createInitialGroupData()
   const [currentTab, setCurrentTab] = useState<TabName>(persistedState?.currentTab ?? '第一組')
-  const [groupData, setGroupData] = useState<Record<GroupTab, GroupData>>(
-    persistedState?.groupData ?? createInitialGroupData,
+  const [groupData, setGroupData] = useState<Record<GroupTab, GroupData>>(initialGroupData)
+  const [groupCollapseState, setGroupCollapseState] = useState<Record<GroupTab, GroupCollapseState>>(
+    createInitialCollapseState(initialGroupData),
   )
-  const [summaryUnlocked, setSummaryUnlocked] = useState(false)
-  const [passcode, setPasscode] = useState('')
-  const [passcodeError, setPasscodeError] = useState('')
+  const [adminUnlocked, setAdminUnlocked] = useState(false)
+  const [adminPasscode, setAdminPasscode] = useState('')
+  const [adminError, setAdminError] = useState('')
   const [ingredientAdjustments, setIngredientAdjustments] = useState<Record<string, string>>(
     persistedState?.ingredientAdjustments ?? {},
   )
   const [toolAdjustments, setToolAdjustments] = useState<Record<string, string>>(
     persistedState?.toolAdjustments ?? {},
   )
+  const [ingredientLibrary, setIngredientLibrary] = useState<string[]>(
+    persistedState?.ingredientLibrary ?? normalizeIngredientLibrary(INGREDIENT_LIBRARY_SEED),
+  )
+  const [preparedSummaryIngredients, setPreparedSummaryIngredients] = useState<Record<string, boolean>>(
+    persistedState?.preparedSummaryIngredients ?? {},
+  )
+  const [preparedGroupIngredients, setPreparedGroupIngredients] = useState<Record<string, boolean>>(
+    persistedState?.preparedGroupIngredients ?? {},
+  )
+  const [preparedGroupTools, setPreparedGroupTools] = useState<Record<string, boolean>>(
+    persistedState?.preparedGroupTools ?? {},
+  )
+  const [shoppingStores, setShoppingStores] = useState<ShoppingStore[]>(
+    persistedState?.shoppingStores ?? [],
+  )
+  const [libraryInput, setLibraryInput] = useState('')
+  const [libraryError, setLibraryError] = useState('')
   const [uploadingDishIds, setUploadingDishIds] = useState<Record<number, boolean>>({})
   const [uploadProgressByDish, setUploadProgressByDish] = useState<Record<number, number>>({})
+  const [resolvedThumbnailByUrl, setResolvedThumbnailByUrl] = useState<Record<string, string>>({})
+  const [thumbnailFetchFailedByUrl, setThumbnailFetchFailedByUrl] = useState<Record<string, boolean>>({})
   const [imageUploadError, setImageUploadError] = useState('')
   const [syncStatus, setSyncStatus] = useState(
     isFirebaseConfigured
@@ -637,14 +961,65 @@ function App() {
   const applyingRemoteRef = useRef(false)
   const remoteLoadedRef = useRef(false)
   const pendingRemovedImageUrlsRef = useRef<Set<string>>(new Set())
+  const thumbnailInFlightRef = useRef<Set<string>>(new Set())
 
   const activeGroup: GroupTab = GROUP_TABS.includes(currentTab as GroupTab)
     ? (currentTab as GroupTab)
     : '第一組'
+  const toolLibrary = useMemo(() => normalizeToolLibrary(TOOL_LIBRARY_SEED), [])
 
   const activeIngredientRows = groupData[activeGroup].ingredientRows
   const activeToolRows = groupData[activeGroup].toolRows
   const activeDishes = groupData[activeGroup].dishes
+
+  useEffect(() => {
+    const candidateUrls = new Set<string>()
+
+    GROUP_TABS.forEach((groupName) => {
+      groupData[groupName].dishes.forEach((dish) => {
+        const parsed = toValidHttpUrl(normalizeUrlInput(dish.videoUrl))
+        if (parsed && isICookRecipeUrl(parsed)) {
+          candidateUrls.add(parsed.toString())
+        }
+      })
+    })
+
+    const pendingUrls = Array.from(candidateUrls).filter(
+      (url) =>
+        !resolvedThumbnailByUrl[url] &&
+        !thumbnailFetchFailedByUrl[url] &&
+        !thumbnailInFlightRef.current.has(url),
+    )
+
+    if (pendingUrls.length === 0) {
+      return
+    }
+
+    const controller = new AbortController()
+
+    pendingUrls.forEach((url) => {
+      thumbnailInFlightRef.current.add(url)
+      void fetchRecipeThumbnailFromApi(url, controller.signal)
+        .then((thumbnailUrl) => {
+          if (controller.signal.aborted) {
+            return
+          }
+
+          if (thumbnailUrl) {
+            setResolvedThumbnailByUrl((prev) => (prev[url] ? prev : { ...prev, [url]: thumbnailUrl }))
+          } else {
+            setThumbnailFetchFailedByUrl((prev) => (prev[url] ? prev : { ...prev, [url]: true }))
+          }
+        })
+        .finally(() => {
+          thumbnailInFlightRef.current.delete(url)
+        })
+    })
+
+    return () => {
+      controller.abort()
+    }
+  }, [groupData, resolvedThumbnailByUrl, thumbnailFetchFailedByUrl])
 
   const allIngredientRows = useMemo(
     () => GROUP_TABS.flatMap((groupName) => groupData[groupName].ingredientRows),
@@ -740,6 +1115,77 @@ function App() {
     () => new Set(activeToolRows.filter((row) => row.tool.trim() && !row.qty.trim()).map((row) => row.id)),
     [activeToolRows],
   )
+
+  const ingredientLibraryByGroup = useMemo(
+    () =>
+      GROUP_TABS.map((groupName) => {
+        const group = groupData[groupName]
+        const dishNameById = new Map(
+          group.dishes.map((dish, index) => [dish.id, dish.title.trim() || `料理${index + 1}`]),
+        )
+
+        const rows: GroupIngredientLibraryRow[] = group.ingredientRows
+          .filter((row) => row.ingredient.trim())
+          .map((row) => ({
+            id: row.id,
+            dishName: dishNameById.get(row.dishId) ?? '未指定料理',
+            ingredient: row.ingredient.trim(),
+            perServingQty: row.perServingQty.trim(),
+            perServingUnit: row.perServingUnit.trim(),
+            totalQty: row.totalQty.trim(),
+            totalUnit: row.totalUnit.trim(),
+            note: row.note.trim(),
+          }))
+
+        return {
+          groupName,
+          rows,
+        }
+      }),
+    [groupData],
+  )
+
+  const toolLibraryByGroup = useMemo(
+    () =>
+      GROUP_TABS.map((groupName) => {
+        const group = groupData[groupName]
+
+        const rows: GroupToolLibraryRow[] = group.toolRows
+          .filter((row) => row.tool.trim())
+          .map((row) => ({
+            id: row.id,
+            tool: row.tool.trim(),
+            qty: row.qty.trim(),
+            unit: row.unit.trim(),
+            note: row.note.trim(),
+          }))
+
+        return {
+          groupName,
+          rows,
+        }
+      }),
+    [groupData],
+  )
+
+  const uniqueSummaryIngredients = useMemo(() => {
+    const list = new Set<string>()
+    ingredientSummaryRows.forEach((r) => list.add(r.ingredient))
+    return Array.from(list).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+  }, [ingredientSummaryRows])
+
+  const visibleTabs: TabName[] = adminUnlocked
+    ? [
+        ...GROUP_TABS,
+        GROUP_INGREDIENT_LIBRARY_TAB,
+        GROUP_TOOL_LIBRARY_TAB,
+        '食材總表',
+        '工具總表',
+        SHOPPING_LIST_TAB,
+        INGREDIENT_LIBRARY_TAB,
+        CHANGELOG_TAB,
+      ]
+    : [...GROUP_TABS, CHANGELOG_TAB]
 
   const updateIngredientRow = (
     groupName: GroupTab,
@@ -843,6 +1289,53 @@ function App() {
         ),
       },
     }))
+  }
+
+  const addDish = (groupName: GroupTab) => {
+    setGroupData((previous) => {
+      const currentDishes = previous[groupName].dishes
+      const newDishId = currentDishes.length > 0 ? Math.max(...currentDishes.map((d) => d.id)) + 1 : Date.now()
+      return {
+        ...previous,
+        [groupName]: {
+          ...previous[groupName],
+          dishes: [...currentDishes, emptyDish(newDishId)],
+        },
+      }
+    })
+    
+    // Add collapse state for the new dish
+    setGroupCollapseState((previous) => {
+      const currentDishes = groupData[groupName].dishes
+      const newDishId = currentDishes.length > 0 ? Math.max(...currentDishes.map((d) => d.id)) + 1 : Date.now()
+      
+      return {
+        ...previous,
+        [groupName]: {
+          ...previous[groupName],
+          dishCollapsedById: {
+            ...previous[groupName].dishCollapsedById,
+            [newDishId]: false,
+          },
+        },
+      }
+    })
+  }
+
+  const removeDish = (groupName: GroupTab, dishId: number) => {
+    setGroupData((previous) => {
+      const currentDishes = previous[groupName].dishes
+      if (currentDishes.length <= 3) return previous
+
+      return {
+        ...previous,
+        [groupName]: {
+          ...previous[groupName],
+          dishes: currentDishes.filter((dish) => dish.id !== dishId),
+          ingredientRows: previous[groupName].ingredientRows.filter((row) => row.dishId !== dishId),
+        },
+      }
+    })
   }
 
   const handleDishImageUpload = async (groupName: GroupTab, dishId: number, fileList: FileList | null) => {
@@ -963,46 +1456,89 @@ function App() {
     }
   }
 
-  const unlockSummaryEdit = () => {
-    if (passcode !== SUMMARY_EDIT_PASSCODE) {
-      setPasscodeError('權限碼錯誤，無法編輯總表。')
+  const unlockAdminAccess = () => {
+    if (adminPasscode !== ADMIN_PASSCODE) {
+      setAdminError('管理員密碼錯誤。')
       return
     }
 
-    setPasscodeError('')
-    setSummaryUnlocked(true)
-    setPasscode('')
+    setAdminError('')
+    setAdminUnlocked(true)
+    setAdminPasscode('')
   }
 
-  const lockSummaryEdit = () => {
-    setSummaryUnlocked(false)
-    setPasscode('')
-    setPasscodeError('')
+  const lockAdminAccess = () => {
+    setAdminUnlocked(false)
+    setAdminPasscode('')
+    setAdminError('')
   }
 
-  const renderSummaryGuard = () => (
-    <section className="panel">
-      <div className="lock-row">
-        <p className="hint lock-text">總表預設唯讀，避免誤改。需管理權限才可輸入「調整量」。</p>
-        {summaryUnlocked ? (
-          <button className="btn-danger" onClick={lockSummaryEdit}>
-            鎖定總表編輯
-          </button>
-        ) : (
-          <div className="lock-form">
-            <input
-              type="password"
-              placeholder="輸入權限碼"
-              value={passcode}
-              onChange={(event) => setPasscode(event.target.value)}
-            />
-            <button onClick={unlockSummaryEdit}>授權編輯</button>
-          </div>
-        )}
-      </div>
-      {passcodeError && <p className="error">{passcodeError}</p>}
-    </section>
-  )
+  const addLibraryIngredient = () => {
+    const trimmed = libraryInput.trim()
+    if (!trimmed) {
+      setLibraryError('請先輸入食材名稱。')
+      return
+    }
+
+    setIngredientLibrary((previous) => {
+      const alreadyExists = previous.some((name) => name.toLowerCase() === trimmed.toLowerCase())
+      if (alreadyExists) {
+        setLibraryError('食材庫已存在相同名稱。')
+        return previous
+      }
+
+      setLibraryError('')
+      return [...previous, trimmed].sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+    })
+    setLibraryInput('')
+  }
+
+  const removeLibraryIngredient = (name: string) => {
+    setIngredientLibrary((previous) => previous.filter((item) => item !== name))
+  }
+
+  const toggleDishCollapse = (groupName: GroupTab, dishId: number) => {
+    setGroupCollapseState((previous) => ({
+      ...previous,
+      [groupName]: {
+        ...previous[groupName],
+        dishCollapsedById: {
+          ...previous[groupName].dishCollapsedById,
+          [dishId]: !previous[groupName].dishCollapsedById[dishId],
+        },
+      },
+    }))
+  }
+
+  const toggleToolsCollapse = (groupName: GroupTab) => {
+    setGroupCollapseState((previous) => ({
+      ...previous,
+      [groupName]: {
+        ...previous[groupName],
+        toolsCollapsed: !previous[groupName].toolsCollapsed,
+      },
+    }))
+  }
+
+  const toggleGroupIngredientTableCollapse = (groupName: GroupTab) => {
+    setGroupCollapseState((previous) => ({
+      ...previous,
+      [groupName]: {
+        ...previous[groupName],
+        groupIngredientTableCollapsed: !previous[groupName].groupIngredientTableCollapsed,
+      },
+    }))
+  }
+
+  const toggleGroupToolTableCollapse = (groupName: GroupTab) => {
+    setGroupCollapseState((previous) => ({
+      ...previous,
+      [groupName]: {
+        ...previous[groupName],
+        groupToolTableCollapsed: !previous[groupName].groupToolTableCollapsed,
+      },
+    }))
+  }
 
   useEffect(() => {
     const payload: PersistedState = {
@@ -1010,10 +1546,37 @@ function App() {
       groupData,
       ingredientAdjustments,
       toolAdjustments,
+      ingredientLibrary,
+      preparedSummaryIngredients,
+      preparedGroupIngredients,
+      preparedGroupTools,
+      shoppingStores,
     }
 
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-  }, [currentTab, groupData, ingredientAdjustments, toolAdjustments])
+  }, [
+    currentTab,
+    groupData,
+    ingredientAdjustments,
+    toolAdjustments,
+    ingredientLibrary,
+    preparedSummaryIngredients,
+    preparedGroupIngredients,
+    preparedGroupTools,
+    shoppingStores,
+  ])
+
+  useEffect(() => {
+    const currentIsHiddenAdminTab = SUMMARY_TABS.includes(currentTab as (typeof SUMMARY_TABS)[number])
+      || currentTab === INGREDIENT_LIBRARY_TAB
+      || currentTab === GROUP_INGREDIENT_LIBRARY_TAB
+      || currentTab === GROUP_TOOL_LIBRARY_TAB
+      || currentTab === SHOPPING_LIST_TAB
+
+    if (!adminUnlocked && currentIsHiddenAdminTab) {
+      setCurrentTab('第一組')
+    }
+  }, [adminUnlocked, currentTab])
 
   useEffect(() => {
     if (!isFirebaseConfigured || !db) {
@@ -1031,14 +1594,13 @@ function App() {
         }
 
         const data = snapshot.data() as Partial<PersistedState>
-        if (!data.groupData || !data.currentTab) {
+        if (!data.groupData) {
           remoteLoadedRef.current = true
           setSyncStatus('已連線雲端：資料格式不完整，保留本機內容')
           return
         }
 
         applyingRemoteRef.current = true
-        setCurrentTab(isValidTab(data.currentTab) ? data.currentTab : '第一組')
         setGroupData((previous) =>
           mergeRemoteWithLocalImages(
             normalizeGroupData(data.groupData),
@@ -1048,11 +1610,29 @@ function App() {
         )
         setIngredientAdjustments(data.ingredientAdjustments ?? {})
         setToolAdjustments(data.toolAdjustments ?? {})
+        setIngredientLibrary(normalizeIngredientLibraryWithSeed(data.ingredientLibrary))
+        setPreparedSummaryIngredients(
+          data.preparedSummaryIngredients && typeof data.preparedSummaryIngredients === 'object'
+            ? data.preparedSummaryIngredients
+            : {},
+        )
+        setPreparedGroupIngredients(
+          data.preparedGroupIngredients && typeof data.preparedGroupIngredients === 'object'
+            ? data.preparedGroupIngredients
+            : {},
+        )
+        setPreparedGroupTools(
+          data.preparedGroupTools && typeof data.preparedGroupTools === 'object'
+            ? data.preparedGroupTools
+            : {},
+        )
+        if (Array.isArray(data.shoppingStores)) {
+          setShoppingStores(data.shoppingStores)
+        }
         remoteLoadedRef.current = true
         setSyncStatus('已連線雲端：即時同步中')
-        setTimeout(() => {
-          applyingRemoteRef.current = false
-        }, 0)
+        // Do not defer the flag update, immediately unlock saving so synchronous local updates don't get ignored
+        applyingRemoteRef.current = false
       },
       () => {
         setSyncStatus('雲端同步失敗，已切換為本機模式')
@@ -1072,35 +1652,167 @@ function App() {
       groupData: stripImagesForCloud(groupData),
       ingredientAdjustments,
       toolAdjustments,
+      ingredientLibrary,
+      preparedSummaryIngredients,
+      preparedGroupIngredients,
+      preparedGroupTools,
+      shoppingStores,
     }
+
+    // currentTab is user-specific UI state, avoid syncing it across all users.
+    const { currentTab: _ignoredCurrentTab, ...cloudPayload } = payload
 
     const projectRef = doc(db, 'projects', firebaseProjectDocId)
     const timer = window.setTimeout(() => {
-      setDoc(projectRef, payload, { merge: true }).catch(() => {
+      setDoc(projectRef, cloudPayload, { merge: true }).catch(() => {
         setSyncStatus('雲端寫入失敗，資料仍保留在本機')
       })
     }, 500)
 
     return () => window.clearTimeout(timer)
-  }, [currentTab, groupData, ingredientAdjustments, toolAdjustments])
+  }, [
+    currentTab,
+    groupData,
+    ingredientAdjustments,
+    toolAdjustments,
+    ingredientLibrary,
+    preparedSummaryIngredients,
+    preparedGroupIngredients,
+    preparedGroupTools,
+    shoppingStores,
+  ])
+
+  // --- Shopping List Functions ---
+  const addShoppingStore = () => {
+    setShoppingStores((prev) => [
+      ...prev,
+      { id: Date.now(), storeName: '新商店', items: [] },
+    ])
+  }
+
+  const removeShoppingStore = (storeId: number) => {
+    setShoppingStores((prev) => prev.filter((s) => s.id !== storeId))
+  }
+
+  const updateShoppingStoreName = (storeId: number, newName: string) => {
+    setShoppingStores((prev) =>
+      prev.map((s) => (s.id === storeId ? { ...s, storeName: newName } : s)),
+    )
+  }
+
+  const addShoppingStoreItem = (storeId: number) => {
+    setShoppingStores((prev) =>
+      prev.map((s) => {
+        if (s.id !== storeId) return s
+        return {
+          ...s,
+          items: [...s.items, { id: Date.now(), ingredient: '', price: '' }],
+        }
+      }),
+    )
+  }
+
+  const removeShoppingStoreItem = (storeId: number, itemId: number) => {
+    setShoppingStores((prev) =>
+      prev.map((s) => {
+        if (s.id !== storeId) return s
+        return { ...s, items: s.items.filter((item) => item.id !== itemId) }
+      }),
+    )
+  }
+
+  const updateShoppingStoreItem = (
+    storeId: number,
+    itemId: number,
+    field: keyof ShoppingStoreItem,
+    value: string | boolean,
+  ) => {
+    setShoppingStores((prev) =>
+      prev.map((s) => {
+        if (s.id !== storeId) return s
+        const updatedItems = s.items.map((item) =>
+          item.id === itemId ? { ...item, [field]: value } : item,
+        )
+        return { ...s, items: updatedItems }
+      }),
+    )
+  }
+
+  const allAssignedIngredients = useMemo(() => {
+    const assigned = new Set<string>()
+    shoppingStores.forEach((store) => {
+      store.items.forEach((item) => {
+        if (item.ingredient) {
+          assigned.add(item.ingredient)
+        }
+      })
+    })
+    return assigned
+  }, [shoppingStores])
 
   return (
     <main className="page">
-      <h1>聖誕趴-廚藝競賽</h1>
-      <p className="hint">{syncStatus}</p>
+      <header className="page-header">
+        <div>
+          <h1>聖誕趴-廚藝競賽</h1>
+          <p className="hint">{syncStatus}</p>
+        </div>
+        <section className="admin-access">
+          <p className="hint admin-title">管理員入口</p>
+          {adminUnlocked ? (
+            <button className="btn-danger" onClick={lockAdminAccess}>
+              登出管理員
+            </button>
+          ) : (
+            <div className="lock-form">
+              <input
+                type="password"
+                placeholder="輸入管理員密碼"
+                value={adminPasscode}
+                onChange={(event) => setAdminPasscode(event.target.value)}
+              />
+              <button onClick={unlockAdminAccess}>解鎖</button>
+            </div>
+          )}
+          {adminError && <p className="error admin-error">{adminError}</p>}
+        </section>
+      </header>
+
       {imageUploadError && <p className="error">{imageUploadError}</p>}
 
       <section className="tabs panel">
-        {[...GROUP_TABS, ...SUMMARY_TABS].map((tabName) => (
-          <button
-            key={tabName}
-            className={currentTab === tabName ? 'tab-active' : ''}
-            onClick={() => setCurrentTab(tabName)}
-          >
-            {tabName}
-          </button>
-        ))}
+        {visibleTabs.map((tabName) => {
+          const isAdminTab =
+            tabName === GROUP_INGREDIENT_LIBRARY_TAB ||
+            tabName === GROUP_TOOL_LIBRARY_TAB ||
+            tabName === '食材總表' ||
+            tabName === '工具總表' ||
+            tabName === SHOPPING_LIST_TAB ||
+            tabName === INGREDIENT_LIBRARY_TAB;
+
+          return (
+            <button
+              key={tabName}
+              className={`${currentTab === tabName ? 'tab-active' : ''} ${isAdminTab ? 'tab-admin' : ''}`.trim()}
+              onClick={() => setCurrentTab(tabName)}
+            >
+              {tabName}
+            </button>
+          )
+        })}
       </section>
+
+      <datalist id="ingredient-library-options">
+        {ingredientLibrary.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+
+      <datalist id="tool-library-options">
+        {toolLibrary.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
 
       {GROUP_TABS.includes(currentTab as GroupTab) && (
         <>
@@ -1134,12 +1846,46 @@ function App() {
 
           {activeDishes.map((dish, dishIndex) => {
             const dishIngredientRows = activeIngredientRows.filter((row) => row.dishId === dish.id)
+            const isDishCollapsed = Boolean(groupCollapseState[activeGroup].dishCollapsedById[dish.id])
 
             return (
               <section key={`input-${dish.id}`} className="panel">
-                <h2>{`料理${dishIndex + 1}`}</h2>
+                <div className="section-header">
+                  <h2>{`料理${dishIndex + 1}`}</h2>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    {dishIndex >= 3 && (
+                      <button
+                        type="button"
+                        className="btn-danger-outline"
+                        onClick={() => {
+                          if (window.confirm(`確定要刪除料理${dishIndex + 1}嗎？該料理下的食材將一併刪除。`)) {
+                            removeDish(activeGroup, dish.id)
+                          }
+                        }}
+                      >
+                        刪除
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn-collapse"
+                      onClick={() => toggleDishCollapse(activeGroup, dish.id)}
+                      aria-expanded={!isDishCollapsed}
+                    >
+                      <span className="btn-collapse-label">{isDishCollapsed ? '展開' : '摺疊'}</span>
+                      <span
+                        className={`btn-collapse-icon ${isDishCollapsed ? 'is-collapsed' : ''}`}
+                        aria-hidden="true"
+                      >
+                        ▲
+                      </span>
+                    </button>
+                  </div>
+                </div>
 
-                <article className="dish-card">
+                <div className={`collapse-content ${isDishCollapsed ? 'is-collapsed' : ''}`}>
+                  <div className="collapse-inner">
+                    <article className="dish-card">
                   <label>
                     料理名稱
                     <input
@@ -1155,9 +1901,75 @@ function App() {
                     <input
                       value={dish.videoUrl}
                       onChange={(event) => updateDish(activeGroup, dish.id, 'videoUrl', event.target.value)}
+                      onBlur={(event) =>
+                        updateDish(activeGroup, dish.id, 'videoUrl', normalizeUrlInput(event.target.value))
+                      }
                       placeholder="貼上 YouTube 或其他料理網址（選填）"
                     />
                   </label>
+                  {dish.videoUrl.trim() && (() => {
+                    const parsedUrl = toValidHttpUrl(dish.videoUrl)
+                    if (!parsedUrl) {
+                      return <p className="field-error">網址格式不正確，請輸入 http(s) 連結。</p>
+                    }
+
+                    const embedUrl = getEmbeddablePreviewUrl(parsedUrl.toString())
+                    const normalizedPreviewUrl = parsedUrl.toString()
+                    const thumbnailUrl = getThumbnailPreviewUrl(
+                      normalizedPreviewUrl,
+                      resolvedThumbnailByUrl,
+                      thumbnailFetchFailedByUrl,
+                    )
+                    const isThumbnailLoading =
+                      isICookRecipeUrl(parsedUrl) &&
+                      !thumbnailUrl &&
+                      !thumbnailFetchFailedByUrl[normalizedPreviewUrl]
+
+                    return (
+                      <div className="video-preview-block">
+                        <a
+                          href={parsedUrl.toString()}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="video-link"
+                        >
+                          開啟連結：{parsedUrl.toString()}
+                        </a>
+                        {embedUrl ? (
+                          <div className="video-embed-wrap">
+                            <iframe
+                              src={embedUrl}
+                              title={`${dish.title || `料理${dishIndex + 1}`} 影片預覽`}
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                              allowFullScreen
+                            />
+                          </div>
+                        ) : thumbnailUrl ? (
+                          <a
+                            href={parsedUrl.toString()}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="link-thumbnail-wrap"
+                          >
+                            <img
+                              src={thumbnailUrl}
+                              alt={`${dish.title || `料理${dishIndex + 1}`} 網址縮圖預覽`}
+                              className="link-thumbnail"
+                              loading="lazy"
+                            />
+                          </a>
+                        ) : (
+                          <div className="video-preview-fallback">
+                            <p className="hint">
+                              {isThumbnailLoading
+                                ? '正在載入食譜縮圖…'
+                                : '此連結不支援內嵌預覽，可直接點擊上方超連結查看。'}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
                   <label>
                     料理圖片（最多 2 張）
                     <input
@@ -1197,85 +2009,179 @@ function App() {
                       </div>
                     ))}
                   </div>
-                </article>
+                    </article>
 
-                <div className="table-wrap section-gap">
+                    <div className="table-wrap section-gap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>食材</th>
+                            <th>一份數量</th>
+                            <th>單位</th>
+                            <th>總量*</th>
+                            <th>總量單位</th>
+                            <th>備註</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {dishIngredientRows.map((row) => (
+                            <tr key={row.id} className={invalidIngredientRowIds.has(row.id) ? 'row-invalid' : ''}>
+                              <td data-label="食材">
+                                <input
+                                  value={row.ingredient}
+                                  onChange={(event) =>
+                                    updateIngredientRow(activeGroup, row.id, 'ingredient', event.target.value)
+                                  }
+                                  placeholder="例如：辣椒粉"
+                                  list="ingredient-library-options"
+                                />
+                              </td>
+                              <td data-label="一份數量">
+                                <input
+                                  value={row.perServingQty}
+                                  onChange={(event) =>
+                                    updateIngredientRow(activeGroup, row.id, 'perServingQty', event.target.value)
+                                  }
+                                  placeholder="例如：10"
+                                />
+                              </td>
+                              <td data-label="單位">
+                                <input
+                                  value={row.perServingUnit}
+                                  onChange={(event) =>
+                                    updateIngredientRow(activeGroup, row.id, 'perServingUnit', event.target.value)
+                                  }
+                                  placeholder="例如：g"
+                                />
+                              </td>
+                              <td data-label="總量*">
+                                <input
+                                  value={row.totalQty}
+                                  onChange={(event) =>
+                                    updateIngredientRow(activeGroup, row.id, 'totalQty', event.target.value)
+                                  }
+                                  placeholder="必填（有食材時）"
+                                  className={invalidIngredientRowIds.has(row.id) ? 'input-error' : ''}
+                                />
+                                {invalidIngredientRowIds.has(row.id) && <p className="field-error">缺少總量</p>}
+                              </td>
+                              <td data-label="總量單位">
+                                <input
+                                  value={row.totalUnit}
+                                  onChange={(event) =>
+                                    updateIngredientRow(activeGroup, row.id, 'totalUnit', event.target.value)
+                                  }
+                                  placeholder="例如：包"
+                                />
+                              </td>
+                              <td data-label="備註">
+                                <input
+                                  value={row.note}
+                                  onChange={(event) =>
+                                    updateIngredientRow(activeGroup, row.id, 'note', event.target.value)
+                                  }
+                                  placeholder="例如：共用材料"
+                                />
+                              </td>
+                              <td data-label="操作">
+                                <button
+                                  className="btn-danger"
+                                  onClick={() => removeIngredientRow(activeGroup, row.id, dish.id)}
+                                >
+                                  刪除
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="actions">
+                      <button onClick={() => addIngredientRow(activeGroup, dish.id)}>新增食材列</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )
+          })}
+
+          <div className="actions" style={{ marginBottom: '2rem', justifyContent: 'center' }}>
+            <button className="btn-secondary" onClick={() => addDish(activeGroup)}>
+              ＋ 新增額外料理
+            </button>
+          </div>
+
+          <section className="panel">
+            <div className="section-header">
+              <h2>工具欄位（不分料理）</h2>
+              <button
+                type="button"
+                className="btn-collapse"
+                onClick={() => toggleToolsCollapse(activeGroup)}
+                aria-expanded={!groupCollapseState[activeGroup].toolsCollapsed}
+              >
+                <span className="btn-collapse-label">
+                  {groupCollapseState[activeGroup].toolsCollapsed ? '展開' : '摺疊'}
+                </span>
+                <span
+                  className={`btn-collapse-icon ${groupCollapseState[activeGroup].toolsCollapsed ? 'is-collapsed' : ''}`}
+                  aria-hidden="true"
+                >
+                  ▲
+                </span>
+              </button>
+            </div>
+
+            <div className={`collapse-content ${groupCollapseState[activeGroup].toolsCollapsed ? 'is-collapsed' : ''}`}>
+              <div className="collapse-inner">
+                <div className="table-wrap">
                   <table>
                     <thead>
                       <tr>
-                        <th>食材</th>
-                        <th>一份數量</th>
+                        <th>工具</th>
+                        <th>數量*</th>
                         <th>單位</th>
-                        <th>總量*</th>
-                        <th>總量單位</th>
                         <th>備註</th>
                         <th>操作</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {dishIngredientRows.map((row) => (
-                        <tr key={row.id} className={invalidIngredientRowIds.has(row.id) ? 'row-invalid' : ''}>
-                          <td>
+                      {activeToolRows.map((row) => (
+                        <tr key={row.id} className={invalidToolRowIds.has(row.id) ? 'row-invalid' : ''}>
+                          <td data-label="工具">
                             <input
-                              value={row.ingredient}
-                              onChange={(event) =>
-                                updateIngredientRow(activeGroup, row.id, 'ingredient', event.target.value)
-                              }
-                              placeholder="例如：辣椒粉"
+                              value={row.tool}
+                              onChange={(event) => updateToolRow(activeGroup, row.id, 'tool', event.target.value)}
+                              placeholder="例如：炒鍋"
+                              list="tool-library-options"
                             />
                           </td>
-                          <td>
+                          <td data-label="數量*">
                             <input
-                              value={row.perServingQty}
-                              onChange={(event) =>
-                                updateIngredientRow(activeGroup, row.id, 'perServingQty', event.target.value)
-                              }
-                              placeholder="例如：10"
+                              value={row.qty}
+                              onChange={(event) => updateToolRow(activeGroup, row.id, 'qty', event.target.value)}
+                              placeholder="有填工具時必填"
+                              className={invalidToolRowIds.has(row.id) ? 'input-error' : ''}
+                            />
+                            {invalidToolRowIds.has(row.id) && <p className="field-error">缺少數量</p>}
+                          </td>
+                          <td data-label="單位">
+                            <input
+                              value={row.unit}
+                              onChange={(event) => updateToolRow(activeGroup, row.id, 'unit', event.target.value)}
+                              placeholder="例如：個"
                             />
                           </td>
-                          <td>
-                            <input
-                              value={row.perServingUnit}
-                              onChange={(event) =>
-                                updateIngredientRow(activeGroup, row.id, 'perServingUnit', event.target.value)
-                              }
-                              placeholder="例如：g"
-                            />
-                          </td>
-                          <td>
-                            <input
-                              value={row.totalQty}
-                              onChange={(event) =>
-                                updateIngredientRow(activeGroup, row.id, 'totalQty', event.target.value)
-                              }
-                              placeholder="必填（有食材時）"
-                              className={invalidIngredientRowIds.has(row.id) ? 'input-error' : ''}
-                            />
-                            {invalidIngredientRowIds.has(row.id) && <p className="field-error">缺少總量</p>}
-                          </td>
-                          <td>
-                            <input
-                              value={row.totalUnit}
-                              onChange={(event) =>
-                                updateIngredientRow(activeGroup, row.id, 'totalUnit', event.target.value)
-                              }
-                              placeholder="例如：包"
-                            />
-                          </td>
-                          <td>
+                          <td data-label="備註">
                             <input
                               value={row.note}
-                              onChange={(event) =>
-                                updateIngredientRow(activeGroup, row.id, 'note', event.target.value)
-                              }
-                              placeholder="例如：共用材料"
+                              onChange={(event) => updateToolRow(activeGroup, row.id, 'note', event.target.value)}
+                              placeholder="例如：共用"
                             />
                           </td>
-                          <td>
-                            <button
-                              className="btn-danger"
-                              onClick={() => removeIngredientRow(activeGroup, row.id, dish.id)}
-                            >
+                          <td data-label="操作">
+                            <button className="btn-danger" onClick={() => removeToolRow(activeGroup, row.id)}>
                               刪除
                             </button>
                           </td>
@@ -1285,70 +2191,9 @@ function App() {
                   </table>
                 </div>
                 <div className="actions">
-                  <button onClick={() => addIngredientRow(activeGroup, dish.id)}>新增食材列</button>
+                  <button onClick={() => addToolRow(activeGroup)}>新增工具列</button>
                 </div>
-              </section>
-            )
-          })}
-
-          <section className="panel">
-            <h2>工具欄位（不分料理）</h2>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>工具</th>
-                    <th>數量*</th>
-                    <th>單位</th>
-                    <th>備註</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {activeToolRows.map((row) => (
-                    <tr key={row.id} className={invalidToolRowIds.has(row.id) ? 'row-invalid' : ''}>
-                      <td>
-                        <input
-                          value={row.tool}
-                          onChange={(event) => updateToolRow(activeGroup, row.id, 'tool', event.target.value)}
-                          placeholder="例如：炒鍋"
-                        />
-                      </td>
-                      <td>
-                        <input
-                          value={row.qty}
-                          onChange={(event) => updateToolRow(activeGroup, row.id, 'qty', event.target.value)}
-                          placeholder="有填工具時必填"
-                          className={invalidToolRowIds.has(row.id) ? 'input-error' : ''}
-                        />
-                        {invalidToolRowIds.has(row.id) && <p className="field-error">缺少數量</p>}
-                      </td>
-                      <td>
-                        <input
-                          value={row.unit}
-                          onChange={(event) => updateToolRow(activeGroup, row.id, 'unit', event.target.value)}
-                          placeholder="例如：個"
-                        />
-                      </td>
-                      <td>
-                        <input
-                          value={row.note}
-                          onChange={(event) => updateToolRow(activeGroup, row.id, 'note', event.target.value)}
-                          placeholder="例如：共用"
-                        />
-                      </td>
-                      <td>
-                        <button className="btn-danger" onClick={() => removeToolRow(activeGroup, row.id)}>
-                          刪除
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="actions">
-              <button onClick={() => addToolRow(activeGroup)}>新增工具列</button>
+              </div>
             </div>
           </section>
 
@@ -1361,15 +2206,15 @@ function App() {
         </>
       )}
 
-      {currentTab === '食材總表' && (
+      {currentTab === '食材總表' && adminUnlocked && (
         <>
-          {renderSummaryGuard()}
           <section className="panel">
             <h2>食材總表</h2>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
+                    <th>備料</th>
                     <th>食材</th>
                     <th>一份數量總和</th>
                     <th>單位</th>
@@ -1383,7 +2228,7 @@ function App() {
                 <tbody>
                   {ingredientSummaryRows.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="empty">
+                      <td colSpan={9} className="empty">
                         尚無可彙總資料
                       </td>
                     </tr>
@@ -1395,11 +2240,25 @@ function App() {
 
                     return (
                       <tr key={key}>
-                        <td>{row.ingredient}</td>
-                        <td>{formatNumber(row.sumPerServingQty)}</td>
-                        <td>{row.perServingUnit}</td>
-                        <td>{formatNumber(row.sumTotalQty)}</td>
-                        <td>
+                        <td data-label="備料">
+                          <input
+                            type="checkbox"
+                            className="prep-checkbox"
+                            checked={Boolean(preparedSummaryIngredients[key])}
+                            onChange={(event) =>
+                              setPreparedSummaryIngredients((previous) => ({
+                                ...previous,
+                                [key]: event.target.checked,
+                              }))
+                            }
+                            aria-label={`標記 ${row.ingredient} 是否已備料`}
+                          />
+                        </td>
+                        <td data-label="食材">{row.ingredient}</td>
+                        <td data-label="一份數量總和">{formatNumber(row.sumPerServingQty)}</td>
+                        <td data-label="單位">{row.perServingUnit}</td>
+                        <td data-label="總量總和">{formatNumber(row.sumTotalQty)}</td>
+                        <td data-label="調整量">
                           <input
                             value={ingredientAdjustments[key] ?? ''}
                             onChange={(event) =>
@@ -1408,13 +2267,12 @@ function App() {
                                 [key]: event.target.value,
                               }))
                             }
-                            disabled={!summaryUnlocked}
                             placeholder="0"
                           />
                         </td>
-                        <td>{formatNumber(finalTotal)}</td>
-                        <td>{row.totalUnit}</td>
-                        <td>{row.note}</td>
+                        <td data-label="最終總量">{formatNumber(finalTotal)}</td>
+                        <td data-label="總量單位">{row.totalUnit}</td>
+                        <td data-label="備註">{row.note}</td>
                       </tr>
                     )
                   })}
@@ -1425,9 +2283,8 @@ function App() {
         </>
       )}
 
-      {currentTab === '工具總表' && (
+      {currentTab === '工具總表' && adminUnlocked && (
         <>
-          {renderSummaryGuard()}
           <section className="panel">
             <h2>工具總表</h2>
             <div className="table-wrap">
@@ -1457,9 +2314,9 @@ function App() {
 
                     return (
                       <tr key={key}>
-                        <td>{row.tool}</td>
-                        <td>{formatNumber(row.sumQty)}</td>
-                        <td>
+                        <td data-label="工具">{row.tool}</td>
+                        <td data-label="需求數量">{formatNumber(row.sumQty)}</td>
+                        <td data-label="調整量">
                           <input
                             value={toolAdjustments[key] ?? ''}
                             onChange={(event) =>
@@ -1468,13 +2325,12 @@ function App() {
                                 [key]: event.target.value,
                               }))
                             }
-                            disabled={!summaryUnlocked}
                             placeholder="0"
                           />
                         </td>
-                        <td>{formatNumber(finalTotal)}</td>
-                        <td>{row.unit}</td>
-                        <td>{row.note}</td>
+                        <td data-label="最終數量">{formatNumber(finalTotal)}</td>
+                        <td data-label="單位">{row.unit}</td>
+                        <td data-label="備註">{row.note}</td>
                       </tr>
                     )
                   })}
@@ -1483,6 +2339,386 @@ function App() {
             </div>
           </section>
         </>
+      )}
+
+      {currentTab === INGREDIENT_LIBRARY_TAB && adminUnlocked && (
+        <section className="panel">
+          <h2>食材庫（管理員）</h2>
+          <p className="hint">新增後會提供給所有組別的食材欄位作為建議選項。</p>
+          <div className="library-add-row">
+            <input
+              value={libraryInput}
+              onChange={(event) => setLibraryInput(event.target.value)}
+              placeholder="輸入食材名稱，例如：雞蛋"
+            />
+            <button onClick={addLibraryIngredient}>加入食材庫</button>
+          </div>
+          {libraryError && <p className="error">{libraryError}</p>}
+          <div className="table-wrap section-gap">
+            <table>
+              <thead>
+                <tr>
+                  <th>食材名稱</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ingredientLibrary.length === 0 && (
+                  <tr>
+                    <td colSpan={2} className="empty">
+                      目前食材庫沒有資料
+                    </td>
+                  </tr>
+                )}
+                {ingredientLibrary.map((name) => (
+                  <tr key={name}>
+                    <td data-label="食材名稱">{name}</td>
+                    <td data-label="操作">
+                      <button className="btn-danger" onClick={() => removeLibraryIngredient(name)}>
+                        刪除
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      {currentTab === GROUP_INGREDIENT_LIBRARY_TAB && adminUnlocked && (
+        <section className="panel">
+          <h2>各組食材表（管理員）</h2>
+          <p className="hint">此頁顯示各組明細，不進行跨組食材合併。</p>
+          {ingredientLibraryByGroup.map(({ groupName, rows }) => (
+            <article key={groupName} className="panel section-gap">
+              <div className="section-header">
+                <h3>{groupName}</h3>
+                <button
+                  type="button"
+                  className="btn-collapse"
+                  onClick={() => toggleGroupIngredientTableCollapse(groupName)}
+                  aria-expanded={!groupCollapseState[groupName].groupIngredientTableCollapsed}
+                >
+                  <span className="btn-collapse-label">
+                    {groupCollapseState[groupName].groupIngredientTableCollapsed ? '展開' : '摺疊'}
+                  </span>
+                  <span
+                    className={`btn-collapse-icon ${groupCollapseState[groupName].groupIngredientTableCollapsed ? 'is-collapsed' : ''}`}
+                    aria-hidden="true"
+                  >
+                    ▲
+                  </span>
+                </button>
+              </div>
+
+              <div
+                className={`collapse-content ${groupCollapseState[groupName].groupIngredientTableCollapsed ? 'is-collapsed' : ''}`}
+              >
+                <div className="collapse-inner table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>備料</th>
+                        <th>料理</th>
+                        <th>食材</th>
+                        <th>一份數量</th>
+                        <th>一份單位</th>
+                        <th>總量</th>
+                        <th>總量單位</th>
+                        <th>備註</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.length === 0 && (
+                        <tr>
+                          <td colSpan={8} className="empty">
+                            此組目前尚未填寫食材
+                          </td>
+                        </tr>
+                      )}
+                      {rows.map((row) => {
+                        const preparedKey = `${groupName}-${row.id}`
+
+                        return (
+                          <tr key={row.id}>
+                            <td data-label="備料">
+                              <input
+                                type="checkbox"
+                                className="prep-checkbox"
+                                checked={Boolean(preparedGroupIngredients[preparedKey])}
+                                onChange={(event) =>
+                                  setPreparedGroupIngredients((previous) => ({
+                                    ...previous,
+                                    [preparedKey]: event.target.checked,
+                                  }))
+                                }
+                                aria-label={`標記 ${groupName} ${row.ingredient} 是否已備料`}
+                              />
+                            </td>
+                            <td data-label="料理">{row.dishName}</td>
+                            <td data-label="食材">{row.ingredient}</td>
+                            <td data-label="一份數量">{row.perServingQty || '-'}</td>
+                            <td data-label="一份單位">{row.perServingUnit || '-'}</td>
+                            <td data-label="總量">{row.totalQty || '-'}</td>
+                            <td data-label="總量單位">{row.totalUnit || '-'}</td>
+                            <td data-label="備註">{row.note || '-'}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+
+      {currentTab === GROUP_TOOL_LIBRARY_TAB && adminUnlocked && (
+        <section className="panel">
+          <h2>各組工具表（管理員）</h2>
+          <p className="hint">此頁顯示各組工具明細，不進行跨組工具合併。</p>
+          {toolLibraryByGroup.map(({ groupName, rows }) => (
+            <article key={groupName} className="panel section-gap">
+              <div className="section-header">
+                <h3>{groupName}</h3>
+                <button
+                  type="button"
+                  className="btn-collapse"
+                  onClick={() => toggleGroupToolTableCollapse(groupName)}
+                  aria-expanded={!groupCollapseState[groupName].groupToolTableCollapsed}
+                >
+                  <span className="btn-collapse-label">
+                    {groupCollapseState[groupName].groupToolTableCollapsed ? '展開' : '摺疊'}
+                  </span>
+                  <span
+                    className={`btn-collapse-icon ${groupCollapseState[groupName].groupToolTableCollapsed ? 'is-collapsed' : ''}`}
+                    aria-hidden="true"
+                  >
+                    ▲
+                  </span>
+                </button>
+              </div>
+
+              <div
+                className={`collapse-content ${groupCollapseState[groupName].groupToolTableCollapsed ? 'is-collapsed' : ''}`}
+              >
+                <div className="collapse-inner table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>備妥</th>
+                        <th>工具</th>
+                        <th>需求數量</th>
+                        <th>單位</th>
+                        <th>備註</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.length === 0 && (
+                        <tr>
+                          <td colSpan={5} className="empty">
+                            此組目前尚未填寫工具
+                          </td>
+                        </tr>
+                      )}
+                      {rows.map((row) => {
+                        const preparedKey = `${groupName}-tool-${row.id}`
+
+                        return (
+                          <tr key={row.id}>
+                            <td data-label="備妥">
+                              <input
+                                type="checkbox"
+                                className="prep-checkbox"
+                                checked={Boolean(preparedGroupTools[preparedKey])}
+                                onChange={(event) =>
+                                  setPreparedGroupTools((previous) => ({
+                                    ...previous,
+                                    [preparedKey]: event.target.checked,
+                                  }))
+                                }
+                                aria-label={`標記 ${groupName} ${row.tool} 是否已備妥`}
+                              />
+                            </td>
+                            <td data-label="工具">{row.tool}</td>
+                            <td data-label="需求數量">{row.qty || '-'}</td>
+                            <td data-label="單位">{row.unit || '-'}</td>
+                            <td data-label="備註">{row.note || '-'}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
+
+      {currentTab === SHOPPING_LIST_TAB && adminUnlocked && (
+        <section className="panel">
+          <div
+            className="section-header"
+            style={{ marginBottom: '1rem', display: 'flex', gap: '1rem', alignItems: 'center' }}
+          >
+            <h2 style={{ margin: 0 }}>食材採買（管理員）</h2>
+            <button className="btn-primary" onClick={addShoppingStore}>
+              ＋ 新增商店
+            </button>
+          </div>
+
+          <p className="hint">
+            可以自訂購買商店，並從食材總表中挑選要在此商店購買的食材。
+            已選過的食材會反灰，系統將自動計算各商店採買總額。
+          </p>
+
+          {shoppingStores.length === 0 ? (
+            <p className="empty">目前沒有商店，請點擊上方按鈕新增商店。</p>
+          ) : (
+            <div className="shopping-stores-list" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+              {shoppingStores.map((store) => {
+                const storeTotal = store.items.reduce((sum, item) => sum + toNumber(item.price), 0)
+
+                return (
+                  <article key={store.id} className="panel">
+                    <div
+                      className="section-header"
+                      style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}
+                    >
+                      <input
+                        type="text"
+                        value={store.storeName}
+                        onChange={(e) => updateShoppingStoreName(store.id, e.target.value)}
+                        placeholder="請輸入商店名稱"
+                        style={{ fontSize: '1.25rem', fontWeight: 'bold', padding: '0.5rem', flex: 1 }}
+                      />
+                      <button className="btn-danger" onClick={() => removeShoppingStore(store.id)}>
+                        刪除商店
+                      </button>
+                    </div>
+
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th style={{ width: '60px' }}>已購</th>
+                            <th>食材</th>
+                            <th>採買金額</th>
+                            <th style={{ width: '80px' }}>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {store.items.length === 0 && (
+                            <tr>
+                              <td colSpan={4} className="empty">
+                                尚未加入食材
+                              </td>
+                            </tr>
+                          )}
+                          {store.items.map((item) => (
+                            <tr key={item.id} style={item.purchased ? { opacity: 0.6 } : {}}>
+                              <td data-label="已購">
+                                <input
+                                  type="checkbox"
+                                  className="prep-checkbox"
+                                  checked={Boolean(item.purchased)}
+                                  onChange={(e) =>
+                                    updateShoppingStoreItem(store.id, item.id, 'purchased', e.target.checked)
+                                  }
+                                  aria-label={`標記 ${item.ingredient || '食材'} 是否已購`}
+                                />
+                              </td>
+                              <td data-label="食材">
+                                <select
+                                  value={item.ingredient}
+                                  onChange={(e) =>
+                                    updateShoppingStoreItem(store.id, item.id, 'ingredient', e.target.value)
+                                  }
+                                >
+                                  <option value="">-- 選擇食材 --</option>
+                                  {uniqueSummaryIngredients.map((name) => {
+                                    const isAssigned = allAssignedIngredients.has(name) && item.ingredient !== name
+                                    return (
+                                      <option
+                                        key={name}
+                                        value={name}
+                                        disabled={isAssigned}
+                                        style={isAssigned ? { color: '#999' } : {}}
+                                      >
+                                        {name} {isAssigned ? '(已排定)' : ''}
+                                      </option>
+                                    )
+                                  })}
+                                </select>
+                              </td>
+                              <td data-label="採買金額">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  inputMode="numeric"
+                                  value={item.price}
+                                  onChange={(e) => updateShoppingStoreItem(store.id, item.id, 'price', e.target.value)}
+                                  placeholder="0"
+                                />
+                              </td>
+                              <td data-label="操作">
+                                <button
+                                  className="btn-danger"
+                                  onClick={() => removeShoppingStoreItem(store.id, item.id)}
+                                >
+                                  移除
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                          <tr>
+                            <td colSpan={4}>
+                              <button className="btn-secondary" onClick={() => addShoppingStoreItem(store.id)}>
+                                ＋ 新增食材
+                              </button>
+                            </td>
+                          </tr>
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td data-label="總計" colSpan={2} style={{ textAlign: 'right', fontWeight: 'bold' }}>
+                              此商店結帳總額
+                            </td>
+                            <td data-label="採買金額" colSpan={2} style={{ fontWeight: 'bold', color: '#b91c1c' }}>
+                              {formatNumber(storeTotal)}
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {currentTab === CHANGELOG_TAB && (
+        <section className="panel">
+          <h2>版本日誌</h2>
+          <div className="changelog-list">
+            {CHANGELOG_ENTRIES.map((entry) => (
+              <article key={entry.version} className="changelog-item">
+                <h3>{entry.version}</h3>
+                <p className="hint">更新日期：{entry.date}</p>
+                <ul>
+                  {entry.changes.map((change) => (
+                    <li key={change}>{change}</li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+        </section>
       )}
     </main>
   )

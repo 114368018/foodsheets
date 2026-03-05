@@ -1,0 +1,73 @@
+// Editable seed tool library.
+// Add or remove items here to maintain your default tool suggestions.
+export const TOOL_LIBRARY_SEED: string[] = [
+  // Heat sources and cookware
+  '卡式爐',
+  '瓦斯爐',
+  '電鍋',
+  '烤箱',
+  '大烤箱',
+  '有變溫功能的烤箱',
+  '氣炸鍋',
+  '鍋子',
+  '飯鍋',
+  '鐵鍋',
+  '不鏽鋼鍋',
+  '炒鍋',
+  '平底鍋',
+  '小平底鍋',
+  '湯鍋',
+  '大湯鍋',
+  '大瓷鍋',
+  '大的陶瓷鍋子',
+  '大鐵盆',
+
+  // Trays, molds, and containers
+  '鐵盤',
+  '大鐵盤',
+  '圓形模具',
+  '圓形壓模器',
+  '裝奶酪的容器',
+  '烤布蕾容器',
+  '杯子蛋糕容器',
+  '碗',
+  '小碗',
+  '大碗公',
+  '盤子',
+  '大盤子',
+  '大白盤',
+
+  // Cutting and prep tools
+  '砧板',
+  '刀子',
+  '菜刀',
+  '水果刀',
+  '刨刀',
+  '削皮刀',
+  '濾網',
+  '篩網',
+  '篩子',
+  '擀麵棍',
+  '夾子',
+  '洗菜籃',
+
+  // Mixing and handling tools
+  '果汁機',
+  '攪拌器',
+  '電動打蛋器',
+  '打蛋器',
+  '分蛋器',
+  '刮刀',
+  '鍋鏟',
+  '矽膠鍋鏟',
+  '湯匙',
+  '小湯匙',
+  '大湯匙',
+
+  // Measuring, baking, and consumables
+  '電子秤',
+  '裱花袋',
+  '噴槍',
+  '鋁箔紙',
+  '廚房紙巾',
+]
