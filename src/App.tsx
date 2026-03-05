@@ -1762,8 +1762,26 @@ function App() {
       projectRef,
       (snapshot) => {
         if (!snapshot.exists()) {
+          const freshGroupData = createInitialGroupData()
+          applyingRemoteRef.current = true
+          setCurrentTab('第一組')
+          setGroupData(freshGroupData)
+          setGroupCollapseState(createInitialCollapseState(freshGroupData))
+          setIngredientAdjustments({})
+          setToolAdjustments({})
+          setIngredientLibrary(normalizeIngredientLibrary(INGREDIENT_LIBRARY_SEED))
+          setPreparedSummaryIngredients({})
+          setPreparedGroupIngredients({})
+          setPreparedGroupTools({})
+          setShoppingStores([])
+          setResolvedThumbnailByUrl({})
+          setThumbnailFetchFailedByUrl({})
+          setImageUploadError('')
+          pendingRemovedImageUrlsRef.current.clear()
+          window.localStorage.removeItem(STORAGE_KEY)
           remoteLoadedRef.current = true
-          setSyncStatus('已連線雲端：首次資料將由目前內容建立')
+          setSyncStatus('已連線雲端：未找到資料，已重建乾淨初始狀態')
+          applyingRemoteRef.current = false
           return
         }
 
