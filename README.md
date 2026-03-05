@@ -15,6 +15,15 @@ npm install
 npm run dev
 ```
 
+若要在本機測試「刪除圖片同步刪除 Cloudinary（/api/cloudinary-delete）」：
+
+```bash
+npm run dev:vercel
+```
+
+並在本機環境提供 server-only 變數（例如放在 `.env`）：
+`CLOUDINARY_CLOUD_NAME`、`CLOUDINARY_API_KEY`、`CLOUDINARY_API_SECRET`。
+
 ## 建置
 
 ```bash

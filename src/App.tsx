@@ -846,6 +846,7 @@ function App() {
       const remainSlots = currentDish ? Math.max(0, 2 - currentDish.images.length) : 0
 
       if (remainSlots === 0) {
+        setImageUploadError('此料理圖片已達 2 張上限，請先刪除後再上傳。')
         setUploadingDishIds((previous) => ({ ...previous, [dishId]: false }))
         return
       }
@@ -894,6 +895,11 @@ function App() {
   }
 
   const removeDishImage = async (groupName: GroupTab, dishId: number, imageIndex: number) => {
+    const confirmed = window.confirm('確定要刪除這張圖片嗎？')
+    if (!confirmed) {
+      return
+    }
+
     const targetImage =
       groupData[groupName].dishes.find((dish) => dish.id === dishId)?.images[imageIndex] ?? null
 
@@ -1101,7 +1107,7 @@ function App() {
 
             return (
               <section key={`input-${dish.id}`} className="panel">
-                <h2>{`料理${dishIndex + 1}`}</h2>
+                <h2>{dish.title.trim()}</h2>
 
                 <article className="dish-card">
                   <label>
@@ -1119,10 +1125,8 @@ function App() {
                     <input
                       value={dish.videoUrl}
                       onChange={(event) => updateDish(activeGroup, dish.id, 'videoUrl', event.target.value)}
-                      placeholder="貼上 YouTube 或其他料理網址"
-                      className={!dish.videoUrl.trim() ? 'input-error' : ''}
+                      placeholder="貼上 YouTube 或其他料理網址（選填）"
                     />
-                    {!dish.videoUrl.trim() && <p className="field-error">影片網址必填</p>}
                   </label>
                   <label>
                     料理圖片（最多 2 張）
@@ -1130,12 +1134,13 @@ function App() {
                       type="file"
                       accept="image/*"
                       multiple
-                      disabled={Boolean(uploadingDishIds[dish.id])}
+                      disabled={Boolean(uploadingDishIds[dish.id]) || dish.images.length >= 2}
                       onChange={async (event) => {
                         await handleDishImageUpload(activeGroup, dish.id, event.target.files)
                         event.currentTarget.value = ''
                       }}
                     />
+                    {dish.images.length >= 2 && <p className="field-error">已達 2 張上限，請先刪除再上傳</p>}
                   </label>
                   {uploadingDishIds[dish.id] && (
                     <div className="upload-progress-wrap">
