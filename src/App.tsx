@@ -537,9 +537,9 @@ const extractPublicIdFromCloudinaryUrl = (url: string): string | null => {
   }
 }
 
-const deleteCloudinaryByPublicId = async (publicId: string): Promise<boolean> => {
+const deleteCloudinaryByPublicId = async (publicId: string): Promise<{ ok: boolean; message?: string }> => {
   if (!publicId) {
-    return false
+    return { ok: false, message: '缺少 publicId' }
   }
 
   const response = await fetch('/api/cloudinary-delete', {
@@ -550,7 +550,16 @@ const deleteCloudinaryByPublicId = async (publicId: string): Promise<boolean> =>
     body: JSON.stringify({ publicId }),
   })
 
-  return response.ok
+  if (response.ok) {
+    return { ok: true }
+  }
+
+  try {
+    const payload = (await response.json()) as { error?: string }
+    return { ok: false, message: payload.error || `HTTP ${response.status}` }
+  } catch {
+    return { ok: false, message: `HTTP ${response.status}` }
+  }
 }
 
 const loadPersistedState = (): PersistedState | null => {
@@ -911,9 +920,11 @@ function App() {
     }
 
     try {
-      const deleted = await deleteCloudinaryByPublicId(publicId)
-      if (!deleted) {
-        setImageUploadError('圖片已從表單移除，但 Cloudinary 同步刪除失敗（請確認已部署 API 與伺服器端金鑰）。')
+      const deleteResult = await deleteCloudinaryByPublicId(publicId)
+      if (!deleteResult.ok) {
+        setImageUploadError(
+          `圖片已從表單移除，但 Cloudinary 同步刪除失敗（${deleteResult.message ?? '請確認已部署 API 與伺服器端金鑰'}）。`,
+        )
       }
     } catch {
       setImageUploadError('圖片已從表單移除，但 Cloudinary 同步刪除失敗（請確認已部署 API 與伺服器端金鑰）。')

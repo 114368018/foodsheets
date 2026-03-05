@@ -19,6 +19,15 @@ const getBodyPublicId = (body: unknown): string => {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+const createCloudinarySignature = (params: Record<string, string>, apiSecret: string): string => {
+  const serialized = Object.keys(params)
+    .sort()
+    .map((key) => `${key}=${params[key]}`)
+    .join('&')
+
+  return crypto.createHash('sha1').update(`${serialized}${apiSecret}`).digest('hex')
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'Method not allowed' })
@@ -41,8 +50,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const timestamp = Math.floor(Date.now() / 1000)
-  const toSign = `public_id=${publicId}&timestamp=${timestamp}${apiSecret}`
-  const signature = crypto.createHash('sha1').update(toSign).digest('hex')
+  const paramsToSign = {
+    invalidate: 'true',
+    public_id: publicId,
+    timestamp: String(timestamp),
+  }
+  const signature = createCloudinarySignature(paramsToSign, apiSecret)
 
   const formData = new URLSearchParams()
   formData.set('public_id', publicId)
