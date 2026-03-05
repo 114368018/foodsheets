@@ -5,6 +5,11 @@ export type ChangelogEntry = {
 }
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
+    {
+    version: 'v2.0.1',
+    date: '2026-03-06',
+    changes: ['新增icon與title'],
+  },
 {
     version: 'v2.0.0',
     date: '2026-03-06',
