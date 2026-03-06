@@ -327,6 +327,10 @@ const normalizeDishSteps = (steps: unknown): string => {
   return typeof steps === 'string' ? steps : ''
 }
 
+const isDishContentEmpty = (dish: Dish): boolean => {
+  return !dish.title.trim() && !dish.videoUrl.trim() && dish.images.length === 0 && !dish.steps.trim()
+}
+
 const normalizeDishImage = (value: unknown): DishImage | null => {
   if (typeof value === 'string') {
     const url = value.trim()
@@ -553,7 +557,7 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
 
     const sourceObj = source as Record<string, unknown>
 
-    const normalizedDishes = Array.isArray(sourceObj.dishes)
+    let normalizedDishes = Array.isArray(sourceObj.dishes)
       ? sourceObj.dishes.map((dish, dishIndex) => {
           const dishObj = (dish ?? {}) as Record<string, unknown>
           return {
@@ -568,6 +572,12 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
         })
       : []
 
+    const legacyThirdDishId = groupOffset + 203
+    const legacyThirdDish = normalizedDishes.find((dish) => dish.id === legacyThirdDishId)
+    if (legacyThirdDish && isDishContentEmpty(legacyThirdDish)) {
+      normalizedDishes = normalizedDishes.filter((dish) => dish.id !== legacyThirdDishId)
+    }
+
     while (normalizedDishes.length < MIN_DISH_COUNT) {
       normalizedDishes.push(emptyDish(groupOffset + 201 + normalizedDishes.length))
     }
@@ -576,7 +586,7 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
       ? sourceObj.ingredientRows.map((row, rowIndex) => {
           const rowObj = (row ?? {}) as Record<string, unknown>
           const fallbackDishId =
-            normalizedDishes[rowIndex % MIN_DISH_COUNT]?.id ?? normalizedDishes[0].id
+            normalizedDishes[rowIndex % normalizedDishes.length]?.id ?? normalizedDishes[0].id
           return {
             id: Number(rowObj.id) || groupOffset + 1 + rowIndex,
             dishId: Number(rowObj.dishId) || fallbackDishId,
@@ -589,6 +599,9 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
           }
         })
       : base[groupName].ingredientRows
+
+    const validDishIds = new Set(normalizedDishes.map((dish) => dish.id))
+    const sanitizedIngredientRows = normalizedIngredientRows.filter((row) => validDishIds.has(row.dishId))
 
     const normalizedToolRows = Array.isArray(sourceObj.toolRows)
       ? sourceObj.toolRows.map((row, rowIndex) => {
@@ -608,7 +621,7 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
       cuisineType: typeof sourceObj.cuisineType === 'string' ? sourceObj.cuisineType : '',
       dishes: normalizedDishes,
       ingredientRows:
-        normalizedIngredientRows.length > 0 ? normalizedIngredientRows : base[groupName].ingredientRows,
+        sanitizedIngredientRows.length > 0 ? sanitizedIngredientRows : base[groupName].ingredientRows,
       toolRows: normalizedToolRows.length > 0 ? normalizedToolRows : base[groupName].toolRows,
     }
   })
@@ -2732,7 +2745,7 @@ function App() {
                 <div className="section-header">
                   <h2>{`料理${dishIndex + 1}`}</h2>
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    {dishIndex >= 3 && canEditActiveGroup && (
+                    {dishIndex >= MIN_DISH_COUNT && canEditActiveGroup && (
                       <button
                         type="button"
                         className="btn-danger-outline"
