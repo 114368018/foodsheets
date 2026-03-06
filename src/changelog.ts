@@ -6,6 +6,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
+    version: 'v2.1.6',
+    date: '2026-03-06',
+    changes: [
+      '補齊所有刪除操作的確認提示框（食材列、工具列、料理、食材庫、工具庫、商店、採買項目）。',
+      '強化刪除流程容錯：Firestore 寫入或刪除失敗時，仍保留本機刪除結果，避免舊快照回灌造成資料復活。',
+    ],
+  },
+  {
     version: 'v2.1.5',
     date: '2026-03-06',
     changes: ['調整初次進站預設分頁為「範例組」，載入後會先聚焦範例組而非第一組。'],

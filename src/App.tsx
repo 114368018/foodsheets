@@ -1180,6 +1180,7 @@ function App() {
 
   const applyingRemoteRef = useRef(false)
   const remoteLoadedRef = useRef(false)
+  const firestoreWriteFailedRef = useRef(false)
   const pendingRemovedImageUrlsRef = useRef<Set<string>>(new Set())
   const pendingRemovedDishIdsRef = useRef<Set<number>>(new Set())
   const thumbnailInFlightRef = useRef<Set<string>>(new Set())
@@ -1479,6 +1480,11 @@ function App() {
   }
 
   const removeIngredientRow = (groupName: GroupTab, id: number, dishId: number) => {
+    const confirmed = window.confirm('確定要刪除此食材列嗎？')
+    if (!confirmed) {
+      return
+    }
+
     setGroupData((previous) => {
       const nextRows = previous[groupName].ingredientRows.filter((row) => row.id !== id)
       const hasDishRow = nextRows.some((row) => row.dishId === dishId)
@@ -1499,6 +1505,11 @@ function App() {
   }
 
   const removeToolRow = (groupName: GroupTab, id: number) => {
+    const confirmed = window.confirm('確定要刪除此工具列嗎？')
+    if (!confirmed) {
+      return
+    }
+
     setGroupData((previous) => {
       const nextRows = previous[groupName].toolRows.filter((row) => row.id !== id)
       return {
@@ -1566,6 +1577,13 @@ function App() {
   }
 
   const removeDish = (groupName: GroupTab, dishId: number) => {
+    const dishIndex = groupData[groupName].dishes.findIndex((dish) => dish.id === dishId)
+    const dishLabel = dishIndex >= 0 ? `料理${dishIndex + 1}` : '此料理'
+    const confirmed = window.confirm(`確定要刪除${dishLabel}嗎？該料理下的食材將一併刪除。`)
+    if (!confirmed) {
+      return
+    }
+
     pendingRemovedDishIdsRef.current.add(dishId)
 
     setGroupData((previous) => {
@@ -1812,13 +1830,14 @@ function App() {
       }
     }
 
+    let firestoreDeleteFailed = false
+
     if (isFirebaseConfigured && db) {
       try {
         const projectRef = doc(db, 'projects', firebaseProjectDocId)
         await deleteDoc(projectRef)
       } catch {
-        setResetError('Firestore 刪除失敗，已中止歸零，請稍後重試。')
-        return
+        firestoreDeleteFailed = true
       }
     }
 
@@ -1850,7 +1869,11 @@ function App() {
     pendingRemovedDishIdsRef.current.clear()
     window.localStorage.removeItem(STORAGE_KEY)
 
-    setSyncStatus('已完成本機 + Firestore + Cloudinary 全部歸零')
+    setSyncStatus(
+      firestoreDeleteFailed
+        ? '已完成本機與 Cloudinary 歸零；Firestore 刪除失敗，已保留本機刪除結果，請稍後重試同步。'
+        : '已完成本機 + Firestore + Cloudinary 全部歸零',
+    )
 
     closeHardResetPanel()
   }
@@ -1876,6 +1899,11 @@ function App() {
   }
 
   const removeLibraryIngredient = (name: string) => {
+    const confirmed = window.confirm(`確定要從食材庫刪除「${name}」嗎？`)
+    if (!confirmed) {
+      return
+    }
+
     setIngredientLibrary((previous) => previous.filter((item) => item !== name))
   }
 
@@ -1900,6 +1928,11 @@ function App() {
   }
 
   const removeLibraryTool = (name: string) => {
+    const confirmed = window.confirm(`確定要從工具庫刪除「${name}」嗎？`)
+    if (!confirmed) {
+      return
+    }
+
     setToolLibrary((previous) => previous.filter((item) => item !== name))
   }
 
@@ -2009,6 +2042,10 @@ function App() {
     const unsubscribe = onSnapshot(
       projectRef,
       (snapshot) => {
+        if (firestoreWriteFailedRef.current) {
+          return
+        }
+
         if (!snapshot.exists()) {
           const baseFreshGroupData = createInitialGroupData()
           applyingRemoteRef.current = true
@@ -2127,9 +2164,17 @@ function App() {
 
     const projectRef = doc(db, 'projects', firebaseProjectDocId)
     const timer = window.setTimeout(() => {
-      setDoc(projectRef, cloudPayload, { merge: true }).catch(() => {
-        setSyncStatus('雲端寫入失敗，資料仍保留在本機')
-      })
+      setDoc(projectRef, cloudPayload, { merge: true })
+        .then(() => {
+          if (firestoreWriteFailedRef.current) {
+            setSyncStatus('雲端寫入已恢復，即時同步中')
+          }
+          firestoreWriteFailedRef.current = false
+        })
+        .catch(() => {
+          firestoreWriteFailedRef.current = true
+          setSyncStatus('雲端寫入失敗，已保留本機刪除結果並暫停套用雲端快照')
+        })
     }, 500)
 
     return () => window.clearTimeout(timer)
@@ -2175,6 +2220,11 @@ function App() {
   }
 
   const removeShoppingStore = (storeId: number) => {
+    const confirmed = window.confirm('確定要刪除此商店嗎？商店內食材會一併刪除。')
+    if (!confirmed) {
+      return
+    }
+
     setShoppingStores((prev) => prev.filter((s) => s.id !== storeId))
   }
 
@@ -2197,6 +2247,11 @@ function App() {
   }
 
   const removeShoppingStoreItem = (storeId: number, itemId: number) => {
+    const confirmed = window.confirm('確定要移除此採買食材嗎？')
+    if (!confirmed) {
+      return
+    }
+
     setShoppingStores((prev) =>
       prev.map((s) => {
         if (s.id !== storeId) return s
@@ -2773,11 +2828,7 @@ function App() {
                       <button
                         type="button"
                         className="btn-danger-outline"
-                        onClick={() => {
-                          if (window.confirm(`確定要刪除料理${dishIndex + 1}嗎？該料理下的食材將一併刪除。`)) {
-                            removeDish(activeGroup, dish.id)
-                          }
-                        }}
+                        onClick={() => removeDish(activeGroup, dish.id)}
                       >
                         刪除
                       </button>
