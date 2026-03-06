@@ -22,21 +22,29 @@ type CloudinaryDeleteResponse = {
   error?: { message?: string }
 }
 
-const getBodyPayload = (body: unknown): { prefix: string; publicIds: string[] } => {
+const getBodyPayload = (
+  body: unknown,
+): { prefix: string; publicIds: string[]; excludePublicIds: string[] } => {
   if (!body || typeof body !== 'object') {
-    return { prefix: '', publicIds: [] }
+    return { prefix: '', publicIds: [], excludePublicIds: [] }
   }
 
-  const bodyObj = body as { prefix?: unknown; publicIds?: unknown }
+  const bodyObj = body as { prefix?: unknown; publicIds?: unknown; excludePublicIds?: unknown }
   const prefix = typeof bodyObj.prefix === 'string' ? bodyObj.prefix.trim() : ''
   const rawPublicIds = Array.isArray(bodyObj.publicIds) ? bodyObj.publicIds : []
+  const rawExcludePublicIds = Array.isArray(bodyObj.excludePublicIds) ? bodyObj.excludePublicIds : []
 
   const publicIds = rawPublicIds
     .filter((value): value is string => typeof value === 'string')
     .map((value) => value.trim())
     .filter(Boolean)
 
-  return { prefix, publicIds }
+  const excludePublicIds = rawExcludePublicIds
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  return { prefix, publicIds, excludePublicIds }
 }
 
 const createCloudinarySignature = (params: Record<string, string>, apiSecret: string): string => {
@@ -159,14 +167,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return
   }
 
-  const { prefix, publicIds: explicitPublicIds } = getBodyPayload(req.body)
+  const {
+    prefix,
+    publicIds: explicitPublicIds,
+    excludePublicIds,
+  } = getBodyPayload(req.body)
   const listedResult = await listResourcesByPrefix(cloudName, apiKey, apiSecret, prefix)
   if (!listedResult.ok) {
     res.status(502).json({ error: listedResult.message ?? 'Failed to list Cloudinary resources' })
     return
   }
 
-  const allPublicIds = Array.from(new Set([...explicitPublicIds, ...listedResult.publicIds]))
+  const excluded = new Set(excludePublicIds)
+  const allPublicIds = Array.from(new Set([...explicitPublicIds, ...listedResult.publicIds])).filter(
+    (publicId) => !excluded.has(publicId),
+  )
   if (allPublicIds.length === 0) {
     res.status(200).json({ deletedCount: 0, failedCount: 0 })
     return

@@ -6,6 +6,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
+    version: 'v2.1.3',
+    date: '2026-03-06',
+    changes: [
+      '各組預設料理數量由 3 道調整為 2 道，第三道改為使用者自行按「新增額外料理」加入。',
+      '料理刪除下限同步調整為至少保留 2 道。',
+    ],
+  },
+  {
     version: 'v2.1.2',
     date: '2026-03-06',
     changes: [

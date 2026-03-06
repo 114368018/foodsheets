@@ -44,6 +44,7 @@ const SHOPPING_LIST_TAB = '食材採買' as const
 const ADMIN_PASSCODE = 'admin'
 const STORAGE_KEY = 'foodsheets.v1.state'
 const RESET_CONFIRM_PHRASE = '全部歸零'
+const MIN_DISH_COUNT = 2
 const CLOUDINARY_CLOUD_NAME = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME
 const CLOUDINARY_UPLOAD_PRESET = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET
 const isCloudinaryConfigured = Boolean(CLOUDINARY_CLOUD_NAME && CLOUDINARY_UPLOAD_PRESET)
@@ -518,16 +519,14 @@ const createInitialGroupData = (): Record<GroupTab, GroupData> => {
   return GROUP_TABS.reduce(
     (acc, groupName, index) => {
       const offset = (index + 1) * 1000
-      const dishes = [emptyDish(offset + 201), emptyDish(offset + 202), emptyDish(offset + 203)]
+      const dishes = Array.from({ length: MIN_DISH_COUNT }, (_, dishIndex) =>
+        emptyDish(offset + 201 + dishIndex),
+      )
       acc[groupName] = {
         teamName: '',
         cuisineType: '',
         dishes,
-        ingredientRows: [
-          emptyIngredientRow(offset + 1, dishes[0].id),
-          emptyIngredientRow(offset + 2, dishes[1].id),
-          emptyIngredientRow(offset + 3, dishes[2].id),
-        ],
+        ingredientRows: dishes.map((dish, dishIndex) => emptyIngredientRow(offset + 1 + dishIndex, dish.id)),
         toolRows: [emptyToolRow(offset + 101), emptyToolRow(offset + 102)],
       }
       return acc
@@ -569,14 +568,15 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
         })
       : []
 
-    while (normalizedDishes.length < 3) {
+    while (normalizedDishes.length < MIN_DISH_COUNT) {
       normalizedDishes.push(emptyDish(groupOffset + 201 + normalizedDishes.length))
     }
 
     const normalizedIngredientRows = Array.isArray(sourceObj.ingredientRows)
       ? sourceObj.ingredientRows.map((row, rowIndex) => {
           const rowObj = (row ?? {}) as Record<string, unknown>
-          const fallbackDishId = normalizedDishes[rowIndex % 3]?.id ?? normalizedDishes[0].id
+          const fallbackDishId =
+            normalizedDishes[rowIndex % MIN_DISH_COUNT]?.id ?? normalizedDishes[0].id
           return {
             id: Number(rowObj.id) || groupOffset + 1 + rowIndex,
             dishId: Number(rowObj.dishId) || fallbackDishId,
@@ -924,10 +924,13 @@ const deleteCloudinaryByPublicId = async (publicId: string): Promise<{ ok: boole
   }
 }
 
-const collectCloudinaryPublicIds = (data: Record<GroupTab, GroupData>): string[] => {
+const collectCloudinaryPublicIds = (
+  data: Record<GroupTab, GroupData>,
+  groupNames: GroupTab[] = [...GROUP_TABS],
+): string[] => {
   const ids = new Set<string>()
 
-  GROUP_TABS.forEach((groupName) => {
+  groupNames.forEach((groupName) => {
     data[groupName].dishes.forEach((dish) => {
       dish.images.forEach((image) => {
         const fromField = image.publicId?.trim()
@@ -950,7 +953,8 @@ const collectCloudinaryPublicIds = (data: Record<GroupTab, GroupData>): string[]
 const deleteCloudinaryAssetsForReset = async (
   groupDataForDelete: Record<GroupTab, GroupData>,
 ): Promise<{ ok: boolean; message?: string }> => {
-  const publicIds = collectCloudinaryPublicIds(groupDataForDelete)
+  const publicIds = collectCloudinaryPublicIds(groupDataForDelete, [...NON_SAMPLE_GROUP_TABS])
+  const excludedPublicIds = collectCloudinaryPublicIds(groupDataForDelete, [SAMPLE_GROUP_TAB])
   const response = await fetch('/api/cloudinary-delete-all', {
     method: 'POST',
     headers: {
@@ -959,6 +963,7 @@ const deleteCloudinaryAssetsForReset = async (
     body: JSON.stringify({
       prefix: `foodsheets/${firebaseProjectDocId}`,
       publicIds,
+      excludePublicIds: excludedPublicIds,
     }),
   })
 
@@ -971,6 +976,16 @@ const deleteCloudinaryAssetsForReset = async (
     return { ok: false, message: payload.error ?? `HTTP ${response.status}` }
   } catch {
     return { ok: false, message: `HTTP ${response.status}` }
+  }
+}
+
+const createHardResetGroupData = (
+  sourceData: Record<GroupTab, GroupData>,
+): Record<GroupTab, GroupData> => {
+  const fresh = createInitialGroupData()
+  return {
+    ...fresh,
+    [SAMPLE_GROUP_TAB]: sourceData[SAMPLE_GROUP_TAB],
   }
 }
 
@@ -1530,7 +1545,7 @@ function App() {
   const removeDish = (groupName: GroupTab, dishId: number) => {
     setGroupData((previous) => {
       const currentDishes = previous[groupName].dishes
-      if (currentDishes.length <= 3) return previous
+      if (currentDishes.length <= MIN_DISH_COUNT) return previous
 
       return {
         ...previous,
@@ -1782,7 +1797,7 @@ function App() {
       }
     }
 
-    const freshGroupData = createInitialGroupData()
+    const freshGroupData = createHardResetGroupData(groupData)
     const freshToolLibrary = normalizeToolLibrary(TOOL_LIBRARY_SEED)
     const freshIngredientLibrary = normalizeIngredientLibrary(INGREDIENT_LIBRARY_SEED)
 
@@ -1969,11 +1984,20 @@ function App() {
       projectRef,
       (snapshot) => {
         if (!snapshot.exists()) {
-          const freshGroupData = createInitialGroupData()
+          const baseFreshGroupData = createInitialGroupData()
           applyingRemoteRef.current = true
           setCurrentTab('第一組')
-          setGroupData(freshGroupData)
-          setGroupCollapseState(createInitialCollapseState(freshGroupData))
+          setGroupData((previous) => ({
+            ...baseFreshGroupData,
+            [SAMPLE_GROUP_TAB]: previous[SAMPLE_GROUP_TAB],
+          }))
+          setGroupCollapseState((previous) => {
+            const next = createInitialCollapseState(baseFreshGroupData)
+            return {
+              ...next,
+              [SAMPLE_GROUP_TAB]: previous[SAMPLE_GROUP_TAB],
+            }
+          })
           setIngredientAdjustments({})
           setToolAdjustments({})
           setToolLibrary(normalizeToolLibrary(TOOL_LIBRARY_SEED))
