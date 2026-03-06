@@ -633,19 +633,28 @@ const mergeRemoteWithLocalImages = (
   remote: Record<GroupTab, GroupData>,
   local: Record<GroupTab, GroupData>,
   pendingRemovedImageUrls: Set<string>,
+  pendingRemovedDishIds: Set<number>,
 ): Record<GroupTab, GroupData> => {
   const merged = { ...remote }
 
   GROUP_TABS.forEach((groupName) => {
     // We want to combine the full list of dishes (remote + local not in remote)
-    const remoteDishesMap = new Map(remote[groupName].dishes.map((r) => [r.id, r]))
+    const filteredRemoteDishes = remote[groupName].dishes.filter(
+      (dish) => !pendingRemovedDishIds.has(dish.id),
+    )
+    const remoteDishesMap = new Map(filteredRemoteDishes.map((r) => [r.id, r]))
     const allDishes = [
-      ...remote[groupName].dishes,
-      ...(local[groupName]?.dishes.filter((localDish) => !remoteDishesMap.has(localDish.id)) ?? []),
+      ...filteredRemoteDishes,
+      ...(local[groupName]?.dishes.filter(
+        (localDish) => !remoteDishesMap.has(localDish.id) && !pendingRemovedDishIds.has(localDish.id),
+      ) ?? []),
     ]
+
+    const validDishIds = new Set(allDishes.map((dish) => dish.id))
 
     merged[groupName] = {
       ...remote[groupName],
+      ingredientRows: remote[groupName].ingredientRows.filter((row) => validDishIds.has(row.dishId)),
       dishes: allDishes.map((dishBase) => {
         // Find matching dishes from both sides (some "remoteDish" might just be local-only now)
         const remoteDish = remoteDishesMap.get(dishBase.id) || dishBase
@@ -1172,6 +1181,7 @@ function App() {
   const applyingRemoteRef = useRef(false)
   const remoteLoadedRef = useRef(false)
   const pendingRemovedImageUrlsRef = useRef<Set<string>>(new Set())
+  const pendingRemovedDishIdsRef = useRef<Set<number>>(new Set())
   const thumbnailInFlightRef = useRef<Set<string>>(new Set())
   const dangerHoldTimerRef = useRef<number | null>(null)
 
@@ -1556,6 +1566,8 @@ function App() {
   }
 
   const removeDish = (groupName: GroupTab, dishId: number) => {
+    pendingRemovedDishIdsRef.current.add(dishId)
+
     setGroupData((previous) => {
       const currentDishes = previous[groupName].dishes
       if (currentDishes.length <= MIN_DISH_COUNT) return previous
@@ -1835,6 +1847,7 @@ function App() {
     setThumbnailFetchFailedByUrl({})
     setImageUploadError('')
     pendingRemovedImageUrlsRef.current.clear()
+    pendingRemovedDishIdsRef.current.clear()
     window.localStorage.removeItem(STORAGE_KEY)
 
     setSyncStatus('已完成本機 + Firestore + Cloudinary 全部歸零')
@@ -2023,6 +2036,7 @@ function App() {
           setThumbnailFetchFailedByUrl({})
           setImageUploadError('')
           pendingRemovedImageUrlsRef.current.clear()
+          pendingRemovedDishIdsRef.current.clear()
           window.localStorage.removeItem(STORAGE_KEY)
           remoteLoadedRef.current = true
           setSyncStatus('已連線雲端：未找到資料，已重建乾淨初始狀態')
@@ -2038,11 +2052,21 @@ function App() {
         }
 
         applyingRemoteRef.current = true
+        const normalizedRemoteGroupData = normalizeGroupData(data.groupData)
+        const remoteDishIds = new Set<number>(
+          GROUP_TABS.flatMap((groupName) => normalizedRemoteGroupData[groupName].dishes.map((dish) => dish.id)),
+        )
+        Array.from(pendingRemovedDishIdsRef.current).forEach((dishId) => {
+          if (!remoteDishIds.has(dishId)) {
+            pendingRemovedDishIdsRef.current.delete(dishId)
+          }
+        })
         setGroupData((previous) =>
           mergeRemoteWithLocalImages(
-            normalizeGroupData(data.groupData),
+            normalizedRemoteGroupData,
             previous,
             pendingRemovedImageUrlsRef.current,
+            pendingRemovedDishIdsRef.current,
           ),
         )
         setIngredientAdjustments(data.ingredientAdjustments ?? {})

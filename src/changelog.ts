@@ -6,6 +6,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
+    version: 'v2.1.4',
+    date: '2026-03-06',
+    changes: [
+      '修正新增後的料理3刪除按鈕顯示條件，現在從料理3開始即可刪除。',
+      '修正即時同步回灌造成的料理復活問題，刪除後不會再被舊快照加回來。',
+    ],
+  },
+  {
     version: 'v2.1.3',
     date: '2026-03-06',
     changes: [
