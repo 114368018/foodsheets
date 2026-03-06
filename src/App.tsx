@@ -2363,6 +2363,99 @@ function App() {
     }
   }
 
+  const exportGroupToolsToWord = async (groupName: GroupTab) => {
+    setWordExportError('')
+    setExportingWord(true)
+
+    try {
+      const tools = groupData[groupName].toolRows
+        .map((row) => ({
+          tool: row.tool.trim(),
+          qty: row.qty.trim(),
+          unit: row.unit.trim(),
+          note: row.note.trim(),
+        }))
+        .filter((row) => row.tool)
+
+      if (tools.length === 0) {
+        setWordExportError('目前沒有可匯出的工具資料。')
+        return
+      }
+
+      const today = new Date().toISOString().slice(0, 10)
+      const children: Paragraph[] = []
+
+      children.push(
+        new Paragraph({
+          text: `${groupName} 所需工具清單`,
+          heading: HeadingLevel.TITLE,
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 80, after: 220 },
+          thematicBreak: true,
+        }),
+      )
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: `匯出日期：${today}`, color: '64748B' })],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 340 },
+        }),
+      )
+
+      tools.forEach((toolRow, index) => {
+        const qtyText = toolRow.qty || '未填數量'
+        const unitText = toolRow.unit || '-'
+
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: `${index + 1}. `, bold: true, color: '0F766E' }),
+              new TextRun({ text: toolRow.tool, bold: true, color: '0F172A' }),
+              new TextRun({ text: `  ${qtyText} ${unitText}`, color: '111827' }),
+            ],
+            spacing: { after: toolRow.note ? 40 : 120 },
+          }),
+        )
+
+        if (toolRow.note) {
+          children.push(
+            new Paragraph({
+              children: [new TextRun({ text: `備註：${toolRow.note}`, color: '475569' })],
+              spacing: { after: 120 },
+            }),
+          )
+        }
+      })
+
+      const doc = new DocxDocument({
+        sections: [
+          {
+            properties: {
+              page: {
+                margin: {
+                  top: 900,
+                  bottom: 900,
+                  left: 900,
+                  right: 900,
+                },
+              },
+            },
+            children,
+          },
+        ],
+      })
+
+      const blob = await Packer.toBlob(doc)
+      const fileName = sanitizeFileName(`${groupName}-所需工具-${today}.docx`)
+      downloadBlobFile(blob, fileName)
+      setShowWordExportOptions(false)
+    } catch {
+      setWordExportError('匯出工具 Word 失敗，請稍後再試。')
+    } finally {
+      setExportingWord(false)
+    }
+  }
+
   return (
     <main className="page">
       <header className="page-header">
@@ -2529,7 +2622,7 @@ function App() {
                   setShowWordExportOptions(true)
                 }}
               >
-                匯出料理步驟 Word(下載單一/全部料理)
+                匯出 Word（料理步驟/所需工具）
               </button>
             ) : (
               <div className="word-export-panel">
@@ -2548,6 +2641,16 @@ function App() {
                     onClick={() => setWordExportMode('single')}
                   >
                     下載各別料理
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      void exportGroupToolsToWord(activeGroup)
+                    }}
+                    disabled={exportingWord}
+                  >
+                    下載所需工具 Word
                   </button>
                 </div>
 

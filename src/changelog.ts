@@ -6,6 +6,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
+    version: 'v2.1.2',
+    date: '2026-03-06',
+    changes: [
+      'Word 匯出主按鈕文案更新為「匯出 Word（料理步驟/所需工具）」，避免僅顯示料理步驟造成誤解。',
+      '「下載所需工具 Word」按鈕移至下載模式列，位置在「下載各別料理」右側。',
+    ],
+  },
+  {
     version: 'v2.1.1',
     date: '2026-03-06',
     changes: [
