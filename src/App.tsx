@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore'
+import {
+  AlignmentType,
+  BorderStyle,
+  Document as DocxDocument,
+  HeadingLevel,
+  ImageRun,
+  Packer,
+  Paragraph,
+  TextRun,
+  type IImageOptions,
+} from 'docx'
 import { INGREDIENT_LIBRARY_SEED } from './ingredient-library'
 import { TOOL_LIBRARY_SEED } from './tool-library'
 import { CHANGELOG_ENTRIES } from './changelog'
@@ -10,8 +21,20 @@ import {
   missingFirebaseEnvKeys,
 } from './firebase'
 
-const GROUP_TABS = ['第一組', '第二組', '第三組', '第四組', '第五組', '第六組', '第七組', '學長姐組'] as const
+const SAMPLE_GROUP_TAB = '範例組' as const
+const GROUP_TABS = [
+  SAMPLE_GROUP_TAB,
+  '第一組',
+  '第二組',
+  '第三組',
+  '第四組',
+  '第五組',
+  '第六組',
+  '第七組',
+  '學長姐組',
+] as const
 const SUMMARY_TABS = ['食材總表', '工具總表'] as const
+const TOOL_LIBRARY_TAB = '工具庫' as const
 const INGREDIENT_LIBRARY_TAB = '食材庫' as const
 const GROUP_INGREDIENT_LIBRARY_TAB = '各組食材表' as const
 const GROUP_TOOL_LIBRARY_TAB = '各組工具表' as const
@@ -28,6 +51,7 @@ type GroupTab = (typeof GROUP_TABS)[number]
 type TabName =
   | GroupTab
   | (typeof SUMMARY_TABS)[number]
+  | typeof TOOL_LIBRARY_TAB
   | typeof INGREDIENT_LIBRARY_TAB
   | typeof GROUP_INGREDIENT_LIBRARY_TAB
   | typeof GROUP_TOOL_LIBRARY_TAB
@@ -114,18 +138,24 @@ type DishImage = {
   publicId?: string
 }
 
+type WordImageType = Exclude<IImageOptions['type'], 'svg'>
+
 type Dish = {
   id: number
   title: string
   videoUrl: string
   images: DishImage[]
+  steps: string
 }
+
+type WordExportMode = 'all' | 'single'
 
 type PersistedState = {
   currentTab: TabName
   groupData: Record<GroupTab, GroupData>
   ingredientAdjustments: Record<string, string>
   toolAdjustments: Record<string, string>
+  toolLibrary: string[]
   ingredientLibrary: string[]
   preparedSummaryIngredients: Record<string, boolean>
   preparedGroupIngredients: Record<string, boolean>
@@ -135,6 +165,7 @@ type PersistedState = {
 
 type GroupCollapseState = {
   dishCollapsedById: Record<number, boolean>
+  dishStepsEditorOpenById: Record<number, boolean>
   toolsCollapsed: boolean
   groupIngredientTableCollapsed: boolean
   groupToolTableCollapsed: boolean
@@ -147,6 +178,13 @@ const createInitialCollapseState = (
     (acc, groupName) => {
       acc[groupName] = {
         dishCollapsedById: sourceData[groupName].dishes.reduce(
+          (dishAcc, dish) => {
+            dishAcc[dish.id] = false
+            return dishAcc
+          },
+          {} as Record<number, boolean>,
+        ),
+        dishStepsEditorOpenById: sourceData[groupName].dishes.reduce(
           (dishAcc, dish) => {
             dishAcc[dish.id] = false
             return dishAcc
@@ -171,6 +209,7 @@ const isValidTab = (value: unknown): value is TabName => {
   return [
     ...GROUP_TABS,
     ...SUMMARY_TABS,
+    TOOL_LIBRARY_TAB,
     INGREDIENT_LIBRARY_TAB,
     GROUP_INGREDIENT_LIBRARY_TAB,
     GROUP_TOOL_LIBRARY_TAB,
@@ -208,6 +247,11 @@ const normalizeIngredientLibrary = (input: unknown): string[] => {
 const normalizeIngredientLibraryWithSeed = (input: unknown): string[] => {
   const values = Array.isArray(input) ? input : []
   return normalizeIngredientLibrary([...INGREDIENT_LIBRARY_SEED, ...values])
+}
+
+const normalizeToolLibraryWithSeed = (input: unknown): string[] => {
+  const values = Array.isArray(input) ? input : []
+  return normalizeToolLibrary([...TOOL_LIBRARY_SEED, ...values])
 }
 
 const normalizeToolLibrary = (input: unknown): string[] => {
@@ -260,6 +304,7 @@ const emptyDish = (id: number): Dish => ({
   title: '',
   videoUrl: '',
   images: [],
+  steps: '',
 })
 
 const normalizeDishTitle = (title: unknown): string => {
@@ -274,6 +319,10 @@ const normalizeDishTitle = (title: unknown): string => {
   }
 
   return title
+}
+
+const normalizeDishSteps = (steps: unknown): string => {
+  return typeof steps === 'string' ? steps : ''
 }
 
 const normalizeDishImage = (value: unknown): DishImage | null => {
@@ -514,6 +563,7 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
             images: Array.isArray(dishObj.images)
               ? uniqueDishImages(dishObj.images.map(normalizeDishImage).filter((value): value is DishImage => Boolean(value))).slice(0, 2)
               : [],
+            steps: normalizeDishSteps(dishObj.steps),
           }
         })
       : []
@@ -944,6 +994,7 @@ const loadPersistedState = (): PersistedState | null => {
       groupData: normalizeGroupData(parsed.groupData),
       ingredientAdjustments: parsed.ingredientAdjustments ?? {},
       toolAdjustments: parsed.toolAdjustments ?? {},
+      toolLibrary: normalizeToolLibraryWithSeed(parsed.toolLibrary),
       ingredientLibrary: normalizeIngredientLibraryWithSeed(parsed.ingredientLibrary),
       preparedSummaryIngredients:
         parsed.preparedSummaryIngredients && typeof parsed.preparedSummaryIngredients === 'object'
@@ -962,6 +1013,70 @@ const loadPersistedState = (): PersistedState | null => {
   } catch {
     return null
   }
+}
+
+const inferDocxImageType = (url: string, contentType: string | null): WordImageType => {
+  const normalizedType = (contentType ?? '').toLowerCase()
+  if (normalizedType.includes('png')) {
+    return 'png'
+  }
+  if (normalizedType.includes('gif')) {
+    return 'gif'
+  }
+  if (normalizedType.includes('bmp')) {
+    return 'bmp'
+  }
+
+  const normalizedUrl = url.toLowerCase()
+  if (normalizedUrl.endsWith('.png')) {
+    return 'png'
+  }
+  if (normalizedUrl.endsWith('.gif')) {
+    return 'gif'
+  }
+  if (normalizedUrl.endsWith('.bmp')) {
+    return 'bmp'
+  }
+
+  return 'jpg'
+}
+
+const fetchImageForDocx = async (
+  url: string,
+): Promise<{ data: Uint8Array; type: WordImageType } | null> => {
+  try {
+    const response = await fetch(url)
+    if (!response.ok) {
+      return null
+    }
+
+    const arrayBuffer = await response.arrayBuffer()
+    if (arrayBuffer.byteLength === 0) {
+      return null
+    }
+
+    return {
+      data: new Uint8Array(arrayBuffer),
+      type: inferDocxImageType(url, response.headers.get('Content-Type')),
+    }
+  } catch {
+    return null
+  }
+}
+
+const downloadBlobFile = (blob: Blob, fileName: string) => {
+  const link = document.createElement('a')
+  const objectUrl = URL.createObjectURL(blob)
+  link.href = objectUrl
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(objectUrl)
+}
+
+const sanitizeFileName = (value: string): string => {
+  return value.replace(/[<>:"/\\|?*]/g, '_').trim()
 }
 
 function App() {
@@ -987,9 +1102,14 @@ function App() {
   const [toolAdjustments, setToolAdjustments] = useState<Record<string, string>>(
     persistedState?.toolAdjustments ?? {},
   )
+  const [toolLibrary, setToolLibrary] = useState<string[]>(
+    persistedState?.toolLibrary ?? normalizeToolLibrary(TOOL_LIBRARY_SEED),
+  )
   const [ingredientLibrary, setIngredientLibrary] = useState<string[]>(
     persistedState?.ingredientLibrary ?? normalizeIngredientLibrary(INGREDIENT_LIBRARY_SEED),
   )
+  const [toolLibraryInput, setToolLibraryInput] = useState('')
+  const [toolLibraryError, setToolLibraryError] = useState('')
   const [preparedSummaryIngredients, setPreparedSummaryIngredients] = useState<Record<string, boolean>>(
     persistedState?.preparedSummaryIngredients ?? {},
   )
@@ -1009,6 +1129,11 @@ function App() {
   const [resolvedThumbnailByUrl, setResolvedThumbnailByUrl] = useState<Record<string, string>>({})
   const [thumbnailFetchFailedByUrl, setThumbnailFetchFailedByUrl] = useState<Record<string, boolean>>({})
   const [imageUploadError, setImageUploadError] = useState('')
+  const [wordExportError, setWordExportError] = useState('')
+  const [exportingWord, setExportingWord] = useState(false)
+  const [showWordExportOptions, setShowWordExportOptions] = useState(false)
+  const [wordExportMode, setWordExportMode] = useState<WordExportMode>('all')
+  const [selectedDishIdForWord, setSelectedDishIdForWord] = useState<number | null>(null)
   const [syncStatus, setSyncStatus] = useState(
     isFirebaseConfigured
       ? 'Firebase 已設定，雲端同步初始化中…'
@@ -1024,11 +1149,25 @@ function App() {
   const activeGroup: GroupTab = GROUP_TABS.includes(currentTab as GroupTab)
     ? (currentTab as GroupTab)
     : '第一組'
-  const toolLibrary = useMemo(() => normalizeToolLibrary(TOOL_LIBRARY_SEED), [])
+  const isActiveGroupSample = activeGroup === SAMPLE_GROUP_TAB
+  const canEditActiveGroup = !isActiveGroupSample || adminUnlocked
 
   const activeIngredientRows = groupData[activeGroup].ingredientRows
   const activeToolRows = groupData[activeGroup].toolRows
   const activeDishes = groupData[activeGroup].dishes
+
+  useEffect(() => {
+    const firstDishId = activeDishes[0]?.id ?? null
+    if (selectedDishIdForWord === null) {
+      setSelectedDishIdForWord(firstDishId)
+      return
+    }
+
+    const hasSelectedDish = activeDishes.some((dish) => dish.id === selectedDishIdForWord)
+    if (!hasSelectedDish) {
+      setSelectedDishIdForWord(firstDishId)
+    }
+  }, [activeDishes, selectedDishIdForWord])
 
   useEffect(() => {
     const candidateUrls = new Set<string>()
@@ -1240,6 +1379,7 @@ function App() {
         '食材總表',
         '工具總表',
         SHOPPING_LIST_TAB,
+        TOOL_LIBRARY_TAB,
         INGREDIENT_LIBRARY_TAB,
         CHANGELOG_TAB,
       ]
@@ -1337,7 +1477,12 @@ function App() {
     }))
   }
 
-  const updateDish = (groupName: GroupTab, dishId: number, field: 'title' | 'videoUrl', value: string) => {
+  const updateDish = (
+    groupName: GroupTab,
+    dishId: number,
+    field: 'title' | 'videoUrl' | 'steps',
+    value: string,
+  ) => {
     setGroupData((previous) => ({
       ...previous,
       [groupName]: {
@@ -1350,34 +1495,30 @@ function App() {
   }
 
   const addDish = (groupName: GroupTab) => {
-    setGroupData((previous) => {
-      const currentDishes = previous[groupName].dishes
-      const newDishId = currentDishes.length > 0 ? Math.max(...currentDishes.map((d) => d.id)) + 1 : Date.now()
-      return {
-        ...previous,
-        [groupName]: {
-          ...previous[groupName],
-          dishes: [...currentDishes, emptyDish(newDishId)],
+    const newDishId = Date.now()
+
+    setGroupData((previous) => ({
+      ...previous,
+      [groupName]: {
+        ...previous[groupName],
+        dishes: [...previous[groupName].dishes, emptyDish(newDishId)],
+      },
+    }))
+
+    setGroupCollapseState((previous) => ({
+      ...previous,
+      [groupName]: {
+        ...previous[groupName],
+        dishCollapsedById: {
+          ...previous[groupName].dishCollapsedById,
+          [newDishId]: false,
         },
-      }
-    })
-    
-    // Add collapse state for the new dish
-    setGroupCollapseState((previous) => {
-      const currentDishes = groupData[groupName].dishes
-      const newDishId = currentDishes.length > 0 ? Math.max(...currentDishes.map((d) => d.id)) + 1 : Date.now()
-      
-      return {
-        ...previous,
-        [groupName]: {
-          ...previous[groupName],
-          dishCollapsedById: {
-            ...previous[groupName].dishCollapsedById,
-            [newDishId]: false,
-          },
+        dishStepsEditorOpenById: {
+          ...previous[groupName].dishStepsEditorOpenById,
+          [newDishId]: false,
         },
-      }
-    })
+      },
+    }))
   }
 
   const removeDish = (groupName: GroupTab, dishId: number) => {
@@ -1391,6 +1532,22 @@ function App() {
           ...previous[groupName],
           dishes: currentDishes.filter((dish) => dish.id !== dishId),
           ingredientRows: previous[groupName].ingredientRows.filter((row) => row.dishId !== dishId),
+        },
+      }
+    })
+
+    setGroupCollapseState((previous) => {
+      const nextDishCollapsedById = { ...previous[groupName].dishCollapsedById }
+      const nextDishStepsEditorOpenById = { ...previous[groupName].dishStepsEditorOpenById }
+      delete nextDishCollapsedById[dishId]
+      delete nextDishStepsEditorOpenById[dishId]
+
+      return {
+        ...previous,
+        [groupName]: {
+          ...previous[groupName],
+          dishCollapsedById: nextDishCollapsedById,
+          dishStepsEditorOpenById: nextDishStepsEditorOpenById,
         },
       }
     })
@@ -1620,6 +1777,7 @@ function App() {
     }
 
     const freshGroupData = createInitialGroupData()
+    const freshToolLibrary = normalizeToolLibrary(TOOL_LIBRARY_SEED)
     const freshIngredientLibrary = normalizeIngredientLibrary(INGREDIENT_LIBRARY_SEED)
 
     setCurrentTab('第一組')
@@ -1627,11 +1785,14 @@ function App() {
     setGroupCollapseState(createInitialCollapseState(freshGroupData))
     setIngredientAdjustments({})
     setToolAdjustments({})
+    setToolLibrary(freshToolLibrary)
     setIngredientLibrary(freshIngredientLibrary)
     setPreparedSummaryIngredients({})
     setPreparedGroupIngredients({})
     setPreparedGroupTools({})
     setShoppingStores([])
+    setToolLibraryInput('')
+    setToolLibraryError('')
     setLibraryInput('')
     setLibraryError('')
     setUploadingDishIds({})
@@ -1671,6 +1832,30 @@ function App() {
     setIngredientLibrary((previous) => previous.filter((item) => item !== name))
   }
 
+  const addLibraryTool = () => {
+    const trimmed = toolLibraryInput.trim()
+    if (!trimmed) {
+      setToolLibraryError('請先輸入工具名稱。')
+      return
+    }
+
+    setToolLibrary((previous) => {
+      const alreadyExists = previous.some((name) => name.toLowerCase() === trimmed.toLowerCase())
+      if (alreadyExists) {
+        setToolLibraryError('工具庫已存在相同名稱。')
+        return previous
+      }
+
+      setToolLibraryError('')
+      return [...previous, trimmed].sort((a, b) => a.localeCompare(b, 'zh-Hant'))
+    })
+    setToolLibraryInput('')
+  }
+
+  const removeLibraryTool = (name: string) => {
+    setToolLibrary((previous) => previous.filter((item) => item !== name))
+  }
+
   const toggleDishCollapse = (groupName: GroupTab, dishId: number) => {
     setGroupCollapseState((previous) => ({
       ...previous,
@@ -1679,6 +1864,19 @@ function App() {
         dishCollapsedById: {
           ...previous[groupName].dishCollapsedById,
           [dishId]: !previous[groupName].dishCollapsedById[dishId],
+        },
+      },
+    }))
+  }
+
+  const toggleDishStepEditor = (groupName: GroupTab, dishId: number) => {
+    setGroupCollapseState((previous) => ({
+      ...previous,
+      [groupName]: {
+        ...previous[groupName],
+        dishStepsEditorOpenById: {
+          ...previous[groupName].dishStepsEditorOpenById,
+          [dishId]: !previous[groupName].dishStepsEditorOpenById[dishId],
         },
       },
     }))
@@ -1720,6 +1918,7 @@ function App() {
       groupData,
       ingredientAdjustments,
       toolAdjustments,
+      toolLibrary,
       ingredientLibrary,
       preparedSummaryIngredients,
       preparedGroupIngredients,
@@ -1733,6 +1932,7 @@ function App() {
     groupData,
     ingredientAdjustments,
     toolAdjustments,
+    toolLibrary,
     ingredientLibrary,
     preparedSummaryIngredients,
     preparedGroupIngredients,
@@ -1742,6 +1942,7 @@ function App() {
 
   useEffect(() => {
     const currentIsHiddenAdminTab = SUMMARY_TABS.includes(currentTab as (typeof SUMMARY_TABS)[number])
+      || currentTab === TOOL_LIBRARY_TAB
       || currentTab === INGREDIENT_LIBRARY_TAB
       || currentTab === GROUP_INGREDIENT_LIBRARY_TAB
       || currentTab === GROUP_TOOL_LIBRARY_TAB
@@ -1769,6 +1970,7 @@ function App() {
           setGroupCollapseState(createInitialCollapseState(freshGroupData))
           setIngredientAdjustments({})
           setToolAdjustments({})
+          setToolLibrary(normalizeToolLibrary(TOOL_LIBRARY_SEED))
           setIngredientLibrary(normalizeIngredientLibrary(INGREDIENT_LIBRARY_SEED))
           setPreparedSummaryIngredients({})
           setPreparedGroupIngredients({})
@@ -1802,6 +2004,7 @@ function App() {
         )
         setIngredientAdjustments(data.ingredientAdjustments ?? {})
         setToolAdjustments(data.toolAdjustments ?? {})
+        setToolLibrary(normalizeToolLibraryWithSeed(data.toolLibrary))
         setIngredientLibrary(normalizeIngredientLibraryWithSeed(data.ingredientLibrary))
         setPreparedSummaryIngredients(
           data.preparedSummaryIngredients && typeof data.preparedSummaryIngredients === 'object'
@@ -1844,6 +2047,7 @@ function App() {
       groupData: stripImagesForCloud(groupData),
       ingredientAdjustments,
       toolAdjustments,
+      toolLibrary,
       ingredientLibrary,
       preparedSummaryIngredients,
       preparedGroupIngredients,
@@ -1867,6 +2071,7 @@ function App() {
     groupData,
     ingredientAdjustments,
     toolAdjustments,
+    toolLibrary,
     ingredientLibrary,
     preparedSummaryIngredients,
     preparedGroupIngredients,
@@ -1961,6 +2166,196 @@ function App() {
     })
     return assigned
   }, [shoppingStores])
+
+  const exportGroupRecipesToWord = async (
+    groupName: GroupTab,
+    mode: WordExportMode,
+    selectedDishId: number | null,
+  ) => {
+    setWordExportError('')
+    setExportingWord(true)
+
+    try {
+      const dishes = groupData[groupName].dishes
+      const dishEntries = dishes
+        .map((dish, index) => ({ dish, dishNumber: index + 1 }))
+        .filter((entry) => (mode === 'all' ? true : entry.dish.id === selectedDishId))
+
+      if (dishEntries.length === 0) {
+        setWordExportError('找不到要下載的料理，請重新選擇。')
+        return
+      }
+
+      const children: Paragraph[] = []
+      const today = new Date().toISOString().slice(0, 10)
+      const exportTitle = mode === 'all' ? `${groupName} 料理步驟手冊` : `${groupName} 單道料理步驟`
+
+      children.push(
+        new Paragraph({
+          text: exportTitle,
+          heading: HeadingLevel.TITLE,
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 80, after: 220 },
+          thematicBreak: true,
+        }),
+      )
+      children.push(
+        new Paragraph({
+          children: [new TextRun({ text: `匯出日期：${today}`, color: '64748B' })],
+          alignment: AlignmentType.CENTER,
+          spacing: { after: 340 },
+        }),
+      )
+
+      for (let index = 0; index < dishEntries.length; index += 1) {
+        const { dish, dishNumber } = dishEntries[index]
+        const dishName = dish.title.trim()
+        const stepLines = dish.steps
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean)
+
+        children.push(
+          new Paragraph({
+            text: `第${dishNumber}道料理`,
+            heading: HeadingLevel.HEADING_1,
+            pageBreakBefore: index > 0,
+            spacing: { before: 120, after: 80 },
+            border: {
+              bottom: {
+                style: BorderStyle.SINGLE,
+                color: '0F766E',
+                size: 8,
+              },
+            },
+          }),
+        )
+        children.push(
+          new Paragraph({
+            children: [
+              new TextRun({ text: '料理名稱：', bold: true, color: '0F172A' }),
+              new TextRun({ text: dishName || ' ', color: '111827' }),
+            ],
+            spacing: { before: 80, after: 200 },
+          }),
+        )
+        children.push(
+          new Paragraph({
+            children: [new TextRun({ text: '料理圖片', bold: true, color: '334155' })],
+            spacing: { before: 40, after: 120 },
+          }),
+        )
+
+        if (dish.images.length === 0) {
+          children.push(
+            new Paragraph({
+              children: [new TextRun({ text: '尚未提供圖片', italics: true, color: '94A3B8' })],
+              spacing: { after: 160 },
+            }),
+          )
+        } else {
+          for (const image of dish.images) {
+            const imagePayload = await fetchImageForDocx(image.url)
+            if (!imagePayload) {
+              continue
+            }
+
+            children.push(
+              new Paragraph({
+                children: [
+                  new ImageRun({
+                    data: imagePayload.data,
+                    type: imagePayload.type,
+                    transformation: {
+                      width: 420,
+                      height: 260,
+                    },
+                  }),
+                ],
+                alignment: AlignmentType.CENTER,
+                spacing: { after: 140 },
+              }),
+            )
+          }
+        }
+
+        children.push(
+          new Paragraph({
+            children: [new TextRun({ text: '料理步驟', bold: true, color: '334155' })],
+            spacing: { before: 80, after: 80 },
+          }),
+        )
+        if (stepLines.length === 0) {
+          children.push(
+            new Paragraph({
+              children: [new TextRun({ text: '尚未填寫步驟', italics: true, color: '94A3B8' })],
+              spacing: { after: 160 },
+            }),
+          )
+        } else {
+          stepLines.forEach((line, stepIndex) => {
+            children.push(
+              new Paragraph({
+                children: [
+                  new TextRun({ text: `${stepIndex + 1}. `, bold: true, color: '0F766E' }),
+                  new TextRun({ text: line, color: '111827' }),
+                ],
+                spacing: { after: 100 },
+              }),
+            )
+          })
+        }
+
+        if (index < dishEntries.length - 1) {
+          children.push(
+            new Paragraph({
+              text: '',
+              border: {
+                bottom: {
+                  style: BorderStyle.SINGLE,
+                  color: 'CBD5E1',
+                  size: 4,
+                },
+              },
+              spacing: { before: 140, after: 140 },
+            }),
+          )
+        }
+      }
+
+      const doc = new DocxDocument({
+        sections: [
+          {
+            properties: {
+              page: {
+                margin: {
+                  top: 900,
+                  bottom: 900,
+                  left: 900,
+                  right: 900,
+                },
+              },
+            },
+            children,
+          },
+        ],
+      })
+
+      const blob = await Packer.toBlob(doc)
+      const selectedDish = dishes.find((dish) => dish.id === selectedDishId)
+      const selectedDishName = selectedDish?.title.trim() || '單道料理'
+      const fileName =
+        mode === 'all'
+          ? sanitizeFileName(`${groupName}-料理步驟-全料理-${today}.docx`)
+          : sanitizeFileName(`${groupName}-${selectedDishName}-料理步驟-${today}.docx`)
+      downloadBlobFile(blob, fileName)
+      setShowWordExportOptions(false)
+    } catch {
+      setWordExportError('匯出 Word 失敗，請稍後再試。')
+    } finally {
+      setExportingWord(false)
+    }
+  }
 
   return (
     <main className="page">
@@ -2057,6 +2452,7 @@ function App() {
             tabName === '食材總表' ||
             tabName === '工具總表' ||
             tabName === SHOPPING_LIST_TAB ||
+            tabName === TOOL_LIBRARY_TAB ||
             tabName === INGREDIENT_LIBRARY_TAB;
 
           return (
@@ -2086,10 +2482,13 @@ function App() {
       {GROUP_TABS.includes(currentTab as GroupTab) && (
         <>
           <p className="hint">{activeGroup}：有填食材時，總量必填；有填工具時，數量必填。</p>
-
+          {isActiveGroupSample && !adminUnlocked && (
+            <p className="hint">範例組目前為唯讀，請使用管理員帳號解鎖後編輯。</p>
+          )}
           <section className="panel">
             <h2>{activeGroup}</h2>
-            <div className="meta-grid">
+            <fieldset className="group-edit-fieldset" disabled={!canEditActiveGroup}>
+              <div className="meta-grid">
               <label>
                 廚神（自行填寫名字）
                 <input
@@ -2110,19 +2509,97 @@ function App() {
                 />
                 {!groupData[activeGroup].cuisineType.trim() && <p className="field-error">此欄位為必填</p>}
               </label>
-            </div>
+              </div>
+            </fieldset>
           </section>
+
+          <div className="actions word-export-actions" style={{ marginBottom: '1rem' }}>
+            {!showWordExportOptions ? (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setWordExportError('')
+                  setShowWordExportOptions(true)
+                }}
+              >
+                匯出料理步驟 Word(下載單一/全部料理)
+              </button>
+            ) : (
+              <div className="word-export-panel">
+                <p className="hint" style={{ marginBottom: '0.5rem' }}>請選擇下載方式</p>
+                <div className="word-export-mode-row">
+                  <button
+                    type="button"
+                    className={wordExportMode === 'all' ? 'word-export-mode-active' : 'btn-secondary'}
+                    onClick={() => setWordExportMode('all')}
+                  >
+                    一次下載所有料理
+                  </button>
+                  <button
+                    type="button"
+                    className={wordExportMode === 'single' ? 'word-export-mode-active' : 'btn-secondary'}
+                    onClick={() => setWordExportMode('single')}
+                  >
+                    下載各別料理
+                  </button>
+                </div>
+
+                {wordExportMode === 'single' && (
+                  <label className="word-export-select-wrap">
+                    選擇要下載的料理
+                    <select
+                      value={selectedDishIdForWord ?? ''}
+                      onChange={(event) => setSelectedDishIdForWord(Number(event.target.value) || null)}
+                    >
+                      {activeDishes.map((dish, index) => (
+                        <option key={dish.id} value={dish.id}>
+                          第{index + 1}道料理 - {dish.title.trim() || '未命名料理'}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+
+                <div className="word-export-button-row">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void exportGroupRecipesToWord(activeGroup, wordExportMode, selectedDishIdForWord)
+                    }}
+                    disabled={
+                      exportingWord || (wordExportMode === 'single' && selectedDishIdForWord === null)
+                    }
+                  >
+                    {exportingWord ? 'Word 產生中…' : '開始下載'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setShowWordExportOptions(false)}
+                    disabled={exportingWord}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
+            {wordExportError && <p className="error">{wordExportError}</p>}
+          </div>
 
           {activeDishes.map((dish, dishIndex) => {
             const dishIngredientRows = activeIngredientRows.filter((row) => row.dishId === dish.id)
             const isDishCollapsed = Boolean(groupCollapseState[activeGroup].dishCollapsedById[dish.id])
+            const isStepEditorOpen = Boolean(
+              groupCollapseState[activeGroup].dishStepsEditorOpenById[dish.id],
+            )
 
             return (
               <section key={`input-${dish.id}`} className="panel">
                 <div className="section-header">
                   <h2>{`料理${dishIndex + 1}`}</h2>
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    {dishIndex >= 3 && (
+                    {dishIndex >= 3 && canEditActiveGroup && (
                       <button
                         type="button"
                         className="btn-danger-outline"
@@ -2154,6 +2631,7 @@ function App() {
 
                 <div className={`collapse-content ${isDishCollapsed ? 'is-collapsed' : ''}`}>
                   <div className="collapse-inner">
+                    <fieldset className="group-edit-fieldset" disabled={!canEditActiveGroup}>
                     <article className="dish-card">
                   <label>
                     料理名稱
@@ -2166,7 +2644,7 @@ function App() {
                     {!dish.title.trim() && <p className="field-error">料理名稱必填</p>}
                   </label>
                   <label>
-                    製作影片網址
+                    製作影片或食譜網址
                     <input
                       value={dish.videoUrl}
                       onChange={(event) => updateDish(activeGroup, dish.id, 'videoUrl', event.target.value)}
@@ -2278,6 +2756,37 @@ function App() {
                       </div>
                     ))}
                   </div>
+                  <div className="dish-steps">
+                    {canEditActiveGroup ? (
+                      <>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => toggleDishStepEditor(activeGroup, dish.id)}
+                        >
+                          {isStepEditorOpen ? '收合料理步驟' : '填寫料理步驟'}
+                        </button>
+                        {isStepEditorOpen && (
+                          <label className="steps-label">
+                            料理步驟（每行一個步驟）
+                            <textarea
+                              value={dish.steps}
+                              onChange={(event) =>
+                                updateDish(activeGroup, dish.id, 'steps', event.target.value)
+                              }
+                              placeholder={'例如：\n備好所有食材\n熱鍋下油爆香\n起鍋前調味'}
+                              rows={6}
+                            />
+                          </label>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <p className="hint">料理步驟（唯讀）</p>
+                        <pre className="steps-readonly">{dish.steps.trim() || '（尚未填寫）'}</pre>
+                      </>
+                    )}
+                  </div>
                     </article>
 
                     <div className="table-wrap section-gap">
@@ -2369,6 +2878,7 @@ function App() {
                     <div className="actions">
                       <button onClick={() => addIngredientRow(activeGroup, dish.id)}>新增食材列</button>
                     </div>
+                    </fieldset>
                   </div>
                 </div>
               </section>
@@ -2376,7 +2886,7 @@ function App() {
           })}
 
           <div className="actions" style={{ marginBottom: '2rem', justifyContent: 'center' }}>
-            <button className="btn-secondary" onClick={() => addDish(activeGroup)}>
+            <button className="btn-secondary" onClick={() => addDish(activeGroup)} disabled={!canEditActiveGroup}>
               ＋ 新增額外料理
             </button>
           </div>
@@ -2404,6 +2914,7 @@ function App() {
 
             <div className={`collapse-content ${groupCollapseState[activeGroup].toolsCollapsed ? 'is-collapsed' : ''}`}>
               <div className="collapse-inner">
+                <fieldset className="group-edit-fieldset" disabled={!canEditActiveGroup}>
                 <div className="table-wrap">
                   <table>
                     <thead>
@@ -2462,6 +2973,7 @@ function App() {
                 <div className="actions">
                   <button onClick={() => addToolRow(activeGroup)}>新增工具列</button>
                 </div>
+                </fieldset>
               </div>
             </div>
           </section>
@@ -2608,6 +3120,51 @@ function App() {
             </div>
           </section>
         </>
+      )}
+
+      {currentTab === TOOL_LIBRARY_TAB && adminUnlocked && (
+        <section className="panel">
+          <h2>工具庫（管理員）</h2>
+          <p className="hint">新增後會提供給所有組別的工具欄位作為建議選項。</p>
+          <div className="library-add-row">
+            <input
+              value={toolLibraryInput}
+              onChange={(event) => setToolLibraryInput(event.target.value)}
+              placeholder="輸入工具名稱，例如：量杯"
+            />
+            <button onClick={addLibraryTool}>加入工具庫</button>
+          </div>
+          {toolLibraryError && <p className="error">{toolLibraryError}</p>}
+          <div className="table-wrap section-gap">
+            <table>
+              <thead>
+                <tr>
+                  <th>工具名稱</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {toolLibrary.length === 0 && (
+                  <tr>
+                    <td colSpan={2} className="empty">
+                      目前工具庫沒有資料
+                    </td>
+                  </tr>
+                )}
+                {toolLibrary.map((name) => (
+                  <tr key={name}>
+                    <td data-label="工具名稱">{name}</td>
+                    <td data-label="操作">
+                      <button className="btn-danger" onClick={() => removeLibraryTool(name)}>
+                        刪除
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
       )}
 
       {currentTab === INGREDIENT_LIBRARY_TAB && adminUnlocked && (

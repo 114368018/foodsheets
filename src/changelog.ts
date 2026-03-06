@@ -5,12 +5,21 @@ export type ChangelogEntry = {
 }
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
-    {
+  {
+    version: 'v2.1.0',
+    date: '2026-03-06',
+    changes: [
+      '新增「範例組」分頁並置於最前方，所有人可查看；僅管理員可編輯內容。',
+      '新增每道料理的料理步驟輸入功能，並支援下載料理步驟 Word 檔。',
+      'Word 匯出新增下載選擇（一次全部或指定單道料理），並優化版面美編樣式。',
+    ],
+  },
+  {
     version: 'v2.0.1',
     date: '2026-03-06',
     changes: ['新增icon與title'],
   },
-{
+  {
     version: 'v2.0.0',
     date: '2026-03-06',
     changes: ['正式版本發布，加入所有資料刪除功能，並清空現有資料。'],
