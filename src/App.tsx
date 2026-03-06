@@ -2877,7 +2877,7 @@ function App() {
                         </button>
                         {isStepEditorOpen && (
                           <label className="steps-label">
-                            料理步驟（每行一個步驟）
+                            料理步驟（每行一個步驟，無須編號）
                             <textarea
                               value={dish.steps}
                               onChange={(event) =>
