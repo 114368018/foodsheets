@@ -6,6 +6,11 @@ export type ChangelogEntry = {
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
+    version: 'v2.1.5',
+    date: '2026-03-06',
+    changes: ['調整初次進站預設分頁為「範例組」，載入後會先聚焦範例組而非第一組。'],
+  },
+  {
     version: 'v2.1.4',
     date: '2026-03-06',
     changes: [

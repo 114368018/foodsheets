@@ -1025,7 +1025,7 @@ const loadPersistedState = (): PersistedState | null => {
 
     const validTab = isValidTab(parsed.currentTab)
       ? parsed.currentTab
-      : '第一組'
+      : SAMPLE_GROUP_TAB
 
     return {
       currentTab: validTab,
@@ -1120,7 +1120,7 @@ const sanitizeFileName = (value: string): string => {
 function App() {
   const persistedState = useMemo(loadPersistedState, [])
   const initialGroupData = persistedState?.groupData ?? createInitialGroupData()
-  const [currentTab, setCurrentTab] = useState<TabName>(persistedState?.currentTab ?? '第一組')
+  const [currentTab, setCurrentTab] = useState<TabName>(persistedState?.currentTab ?? SAMPLE_GROUP_TAB)
   const [groupData, setGroupData] = useState<Record<GroupTab, GroupData>>(initialGroupData)
   const [groupCollapseState, setGroupCollapseState] = useState<Record<GroupTab, GroupCollapseState>>(
     createInitialCollapseState(initialGroupData),
@@ -1826,7 +1826,7 @@ function App() {
     const freshToolLibrary = normalizeToolLibrary(TOOL_LIBRARY_SEED)
     const freshIngredientLibrary = normalizeIngredientLibrary(INGREDIENT_LIBRARY_SEED)
 
-    setCurrentTab('第一組')
+    setCurrentTab(SAMPLE_GROUP_TAB)
     setGroupData(freshGroupData)
     setGroupCollapseState(createInitialCollapseState(freshGroupData))
     setIngredientAdjustments({})
@@ -2012,7 +2012,7 @@ function App() {
         if (!snapshot.exists()) {
           const baseFreshGroupData = createInitialGroupData()
           applyingRemoteRef.current = true
-          setCurrentTab('第一組')
+          setCurrentTab(SAMPLE_GROUP_TAB)
           setGroupData((previous) => ({
             ...baseFreshGroupData,
             [SAMPLE_GROUP_TAB]: previous[SAMPLE_GROUP_TAB],
