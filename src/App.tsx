@@ -64,6 +64,7 @@ type ShoppingStoreItem = {
   id: number
   ingredient: string
   price: string
+  ownedQty?: string
   purchased?: boolean
 }
 
@@ -160,9 +161,19 @@ type PersistedState = {
   toolLibrary: string[]
   ingredientLibrary: string[]
   preparedSummaryIngredients: Record<string, boolean>
+  preparedSummaryTools: Record<string, boolean>
   preparedGroupIngredients: Record<string, boolean>
   preparedGroupTools: Record<string, boolean>
   shoppingStores: ShoppingStore[]
+}
+
+type ShoppingIngredientOverviewRow = {
+  ingredient: string
+  requiredTotal: number
+  totalUnit: string
+  requiredDisplay: string
+  note: string
+  assignedStoreName: string | null
 }
 
 type GroupCollapseState = {
@@ -1038,6 +1049,10 @@ const loadPersistedState = (): PersistedState | null => {
         parsed.preparedSummaryIngredients && typeof parsed.preparedSummaryIngredients === 'object'
           ? parsed.preparedSummaryIngredients
           : {},
+      preparedSummaryTools:
+        parsed.preparedSummaryTools && typeof parsed.preparedSummaryTools === 'object'
+          ? parsed.preparedSummaryTools
+          : {},
       preparedGroupIngredients:
         parsed.preparedGroupIngredients && typeof parsed.preparedGroupIngredients === 'object'
           ? parsed.preparedGroupIngredients
@@ -1150,6 +1165,9 @@ function App() {
   const [toolLibraryError, setToolLibraryError] = useState('')
   const [preparedSummaryIngredients, setPreparedSummaryIngredients] = useState<Record<string, boolean>>(
     persistedState?.preparedSummaryIngredients ?? {},
+  )
+  const [preparedSummaryTools, setPreparedSummaryTools] = useState<Record<string, boolean>>(
+    persistedState?.preparedSummaryTools ?? {},
   )
   const [preparedGroupIngredients, setPreparedGroupIngredients] = useState<Record<string, boolean>>(
     persistedState?.preparedGroupIngredients ?? {},
@@ -1410,6 +1428,57 @@ function App() {
     ingredientSummaryRows.forEach((r) => list.add(r.ingredient))
     return Array.from(list).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
   }, [ingredientSummaryRows])
+
+  const shoppingIngredientOverviewRows = useMemo<ShoppingIngredientOverviewRow[]>(() => {
+    const grouped = new Map<string, ShoppingIngredientOverviewRow>()
+    const assignedStoreNameByIngredient = new Map<string, string>()
+
+    shoppingStores.forEach((store) => {
+      store.items.forEach((item) => {
+        const ingredientName = item.ingredient.trim()
+        if (!ingredientName || assignedStoreNameByIngredient.has(ingredientName)) {
+          return
+        }
+
+        assignedStoreNameByIngredient.set(ingredientName, store.storeName.trim() || '未命名商店')
+      })
+    })
+
+    ingredientSummaryRows.forEach((row) => {
+      const key = `${row.ingredient}-${row.perServingUnit}-${row.totalUnit}-${row.note}`
+      const adjustment = toNumber(ingredientAdjustments[key] ?? '')
+      const finalTotal = row.sumTotalQty + adjustment
+      const groupKey = `${row.ingredient.toLowerCase()}|${row.totalUnit.trim().toLowerCase()}`
+      const existing = grouped.get(groupKey)
+
+      if (!existing) {
+        grouped.set(groupKey, {
+          ingredient: row.ingredient,
+          requiredTotal: finalTotal,
+          totalUnit: row.totalUnit.trim(),
+          requiredDisplay: '',
+          note: row.note.trim(),
+          assignedStoreName: assignedStoreNameByIngredient.get(row.ingredient) ?? null,
+        })
+        return
+      }
+
+      existing.requiredTotal += finalTotal
+      if (row.note.trim()) {
+        existing.note = [existing.note, row.note.trim()].filter(Boolean).join(' / ')
+      }
+      if (!existing.assignedStoreName) {
+        existing.assignedStoreName = assignedStoreNameByIngredient.get(row.ingredient) ?? null
+      }
+    })
+
+    return Array.from(grouped.values())
+      .map((row) => ({
+        ...row,
+        requiredDisplay: `${formatNumber(row.requiredTotal)}${row.totalUnit ? ` ${row.totalUnit}` : ''}`.trim(),
+      }))
+      .sort((a, b) => a.ingredient.localeCompare(b.ingredient, 'zh-Hant'))
+  }, [ingredientAdjustments, ingredientSummaryRows, shoppingStores])
 
   const summaryIngredientSet = useMemo(
     () => new Set(uniqueSummaryIngredients),
@@ -1853,6 +1922,7 @@ function App() {
     setToolLibrary(freshToolLibrary)
     setIngredientLibrary(freshIngredientLibrary)
     setPreparedSummaryIngredients({})
+    setPreparedSummaryTools({})
     setPreparedGroupIngredients({})
     setPreparedGroupTools({})
     setShoppingStores([])
@@ -2001,6 +2071,7 @@ function App() {
       toolLibrary,
       ingredientLibrary,
       preparedSummaryIngredients,
+      preparedSummaryTools,
       preparedGroupIngredients,
       preparedGroupTools,
       shoppingStores,
@@ -2015,6 +2086,7 @@ function App() {
     toolLibrary,
     ingredientLibrary,
     preparedSummaryIngredients,
+    preparedSummaryTools,
     preparedGroupIngredients,
     preparedGroupTools,
     shoppingStores,
@@ -2066,6 +2138,7 @@ function App() {
           setToolLibrary(normalizeToolLibrary(TOOL_LIBRARY_SEED))
           setIngredientLibrary(normalizeIngredientLibrary(INGREDIENT_LIBRARY_SEED))
           setPreparedSummaryIngredients({})
+          setPreparedSummaryTools({})
           setPreparedGroupIngredients({})
           setPreparedGroupTools({})
           setShoppingStores([])
@@ -2115,6 +2188,11 @@ function App() {
             ? data.preparedSummaryIngredients
             : {},
         )
+        setPreparedSummaryTools(
+          data.preparedSummaryTools && typeof data.preparedSummaryTools === 'object'
+            ? data.preparedSummaryTools
+            : {},
+        )
         setPreparedGroupIngredients(
           data.preparedGroupIngredients && typeof data.preparedGroupIngredients === 'object'
             ? data.preparedGroupIngredients
@@ -2154,6 +2232,7 @@ function App() {
       toolLibrary,
       ingredientLibrary,
       preparedSummaryIngredients,
+      preparedSummaryTools,
       preparedGroupIngredients,
       preparedGroupTools,
       shoppingStores,
@@ -2186,6 +2265,7 @@ function App() {
     toolLibrary,
     ingredientLibrary,
     preparedSummaryIngredients,
+    preparedSummaryTools,
     preparedGroupIngredients,
     preparedGroupTools,
     shoppingStores,
@@ -2240,7 +2320,7 @@ function App() {
         if (s.id !== storeId) return s
         return {
           ...s,
-          items: [...s.items, { id: Date.now(), ingredient: '', price: '' }],
+          items: [...s.items, { id: Date.now(), ingredient: '', price: '', ownedQty: '' }],
         }
       }),
     )
@@ -3293,6 +3373,7 @@ function App() {
               <table>
                 <thead>
                   <tr>
+                    <th>備妥</th>
                     <th>工具</th>
                     <th>需求數量</th>
                     <th>調整量</th>
@@ -3304,7 +3385,7 @@ function App() {
                 <tbody>
                   {toolSummaryRows.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="empty">
+                      <td colSpan={7} className="empty">
                         尚無可彙總資料
                       </td>
                     </tr>
@@ -3316,6 +3397,20 @@ function App() {
 
                     return (
                       <tr key={key}>
+                        <td data-label="備妥">
+                          <input
+                            type="checkbox"
+                            className="prep-checkbox"
+                            checked={Boolean(preparedSummaryTools[key])}
+                            onChange={(event) =>
+                              setPreparedSummaryTools((previous) => ({
+                                ...previous,
+                                [key]: event.target.checked,
+                              }))
+                            }
+                            aria-label={`標記 ${row.tool} 是否已備妥`}
+                          />
+                        </td>
                         <td data-label="工具">{row.tool}</td>
                         <td data-label="需求數量">{formatNumber(row.sumQty)}</td>
                         <td data-label="調整量">
@@ -3618,9 +3713,39 @@ function App() {
           </div>
 
           <p className="hint">
-            可以自訂購買商店，並從食材總表中挑選要在此商店購買的食材。
-            已選過的食材會反灰，系統將自動計算各商店採買總額。
+            這裡直接顯示每個食材的需求總量與單位，選完食材後可直接填「家中已有」，系統會自動算出還要買多少。
+            已選過的食材會反灰，避免同一項食材被重複分派到不同商店。
           </p>
+
+          <div className="table-wrap section-gap">
+            <table>
+              <thead>
+                <tr>
+                  <th>食材</th>
+                  <th>需求總量</th>
+                  <th>備註</th>
+                  <th>已分配商店</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shoppingIngredientOverviewRows.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="empty">
+                      目前沒有可採買的食材摘要
+                    </td>
+                  </tr>
+                )}
+                {shoppingIngredientOverviewRows.map((row) => (
+                  <tr key={`${row.ingredient}-${row.totalUnit}`}>
+                    <td data-label="食材">{row.ingredient}</td>
+                    <td data-label="需求總量">{row.requiredDisplay}</td>
+                    <td data-label="備註">{row.note || '-'}</td>
+                    <td data-label="已分配商店">{row.assignedStoreName ?? '尚未分配'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
 
           {shoppingStores.length === 0 ? (
             <p className="empty">目前沒有商店，請點擊上方按鈕新增商店。</p>
@@ -3658,6 +3783,10 @@ function App() {
                           <tr>
                             <th style={{ width: '60px' }}>已購</th>
                             <th>食材</th>
+                            <th>需求量</th>
+                            <th>家中已有</th>
+                            <th>還要買</th>
+                            <th>單位</th>
                             <th>採買金額</th>
                             <th style={{ width: '80px' }}>操作</th>
                           </tr>
@@ -3665,69 +3794,92 @@ function App() {
                         <tbody>
                           {store.items.length === 0 && (
                             <tr>
-                              <td colSpan={4} className="empty">
+                              <td colSpan={8} className="empty">
                                 尚未加入食材
                               </td>
                             </tr>
                           )}
-                          {store.items.map((item) => (
-                            <tr key={item.id} style={item.purchased ? { opacity: 0.6 } : {}}>
-                              <td data-label="已購">
-                                <input
-                                  type="checkbox"
-                                  className="prep-checkbox"
-                                  checked={Boolean(item.purchased)}
-                                  onChange={(e) =>
-                                    updateShoppingStoreItem(store.id, item.id, 'purchased', e.target.checked)
-                                  }
-                                  aria-label={`標記 ${item.ingredient || '食材'} 是否已購`}
-                                />
-                              </td>
-                              <td data-label="食材">
-                                <select
-                                  value={item.ingredient}
-                                  onChange={(e) =>
-                                    updateShoppingStoreItem(store.id, item.id, 'ingredient', e.target.value)
-                                  }
-                                >
-                                  <option value="">-- 選擇食材 --</option>
-                                  {uniqueSummaryIngredients.map((name) => {
-                                    const isAssigned = allAssignedIngredients.has(name) && item.ingredient !== name
-                                    return (
-                                      <option
-                                        key={name}
-                                        value={name}
-                                        disabled={isAssigned}
-                                        style={isAssigned ? { color: '#999' } : {}}
-                                      >
-                                        {name} {isAssigned ? '(已排定)' : ''}
-                                      </option>
-                                    )
-                                  })}
-                                </select>
-                              </td>
-                              <td data-label="採買金額">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  inputMode="numeric"
-                                  value={item.price}
-                                  onChange={(e) => updateShoppingStoreItem(store.id, item.id, 'price', e.target.value)}
-                                  placeholder="0"
-                                />
-                              </td>
-                              <td data-label="操作">
-                                <button
-                                  className="btn-danger"
-                                  onClick={() => removeShoppingStoreItem(store.id, item.id)}
-                                >
-                                  移除
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                          {store.items.map((item) => {
+                            const selectedRequirement = shoppingIngredientOverviewRows.find(
+                              (row) => row.ingredient === item.ingredient,
+                            )
+                            const ownedQty = toNumber(item.ownedQty ?? '')
+                            const remainingQty = Math.max((selectedRequirement?.requiredTotal ?? 0) - ownedQty, 0)
+
+                            return (
+                              <tr key={item.id} style={item.purchased ? { opacity: 0.6 } : {}}>
+                                <td data-label="已購">
+                                  <input
+                                    type="checkbox"
+                                    className="prep-checkbox"
+                                    checked={Boolean(item.purchased)}
+                                    onChange={(e) =>
+                                      updateShoppingStoreItem(store.id, item.id, 'purchased', e.target.checked)
+                                    }
+                                    aria-label={`標記 ${item.ingredient || '食材'} 是否已購`}
+                                  />
+                                </td>
+                                <td data-label="食材">
+                                  <select
+                                    value={item.ingredient}
+                                    onChange={(e) => {
+                                      updateShoppingStoreItem(store.id, item.id, 'ingredient', e.target.value)
+                                      updateShoppingStoreItem(store.id, item.id, 'ownedQty', '')
+                                    }}
+                                  >
+                                    <option value="">-- 選擇食材 --</option>
+                                    {uniqueSummaryIngredients.map((name) => {
+                                      const isAssigned = allAssignedIngredients.has(name) && item.ingredient !== name
+                                      return (
+                                        <option
+                                          key={name}
+                                          value={name}
+                                          disabled={isAssigned}
+                                          style={isAssigned ? { color: '#999' } : {}}
+                                        >
+                                          {name} {isAssigned ? '(已排定)' : ''}
+                                        </option>
+                                      )
+                                    })}
+                                  </select>
+                                </td>
+                                <td data-label="需求量">{selectedRequirement?.requiredDisplay ?? '-'}</td>
+                                <td data-label="家中已有">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    inputMode="decimal"
+                                    value={item.ownedQty ?? ''}
+                                    onChange={(e) => updateShoppingStoreItem(store.id, item.id, 'ownedQty', e.target.value)}
+                                    placeholder="0"
+                                    disabled={!selectedRequirement}
+                                  />
+                                </td>
+                                <td data-label="還要買">{selectedRequirement ? formatNumber(remainingQty) : '-'}</td>
+                                <td data-label="單位">{selectedRequirement?.totalUnit || '-'}</td>
+                                <td data-label="採買金額">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    inputMode="numeric"
+                                    value={item.price}
+                                    onChange={(e) => updateShoppingStoreItem(store.id, item.id, 'price', e.target.value)}
+                                    placeholder="0"
+                                  />
+                                </td>
+                                <td data-label="操作">
+                                  <button
+                                    className="btn-danger"
+                                    onClick={() => removeShoppingStoreItem(store.id, item.id)}
+                                  >
+                                    移除
+                                  </button>
+                                </td>
+                              </tr>
+                            )
+                          })}
                           <tr>
-                            <td colSpan={4}>
+                            <td colSpan={8}>
                               <button className="btn-secondary" onClick={() => addShoppingStoreItem(store.id)}>
                                 ＋ 新增食材
                               </button>
@@ -3736,7 +3888,7 @@ function App() {
                         </tbody>
                         <tfoot>
                           <tr>
-                            <td data-label="總計" colSpan={2} style={{ textAlign: 'right', fontWeight: 'bold' }}>
+                            <td data-label="總計" colSpan={6} style={{ textAlign: 'right', fontWeight: 'bold' }}>
                               此商店結帳總額
                             </td>
                             <td data-label="採買金額" colSpan={2} style={{ fontWeight: 'bold', color: '#b91c1c' }}>

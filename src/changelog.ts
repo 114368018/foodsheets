@@ -6,6 +6,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
+    version: 'v2.1.7',
+    date: '2026-03-06',
+    changes: [
+      '工具總表新增「備妥」勾選框，可直接標記每項工具是否已準備完成。',
+      '食材採買頁面直接顯示各食材需求總量、已分配商店，並新增「家中已有 / 還要買」欄位，減少在食材總表與採買頁之間切換。',
+    ],
+  },
+  {
     version: 'v2.1.6',
     date: '2026-03-06',
     changes: [
