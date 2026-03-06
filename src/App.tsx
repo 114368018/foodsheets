@@ -1190,6 +1190,12 @@ function App() {
   const [showWordExportOptions, setShowWordExportOptions] = useState(false)
   const [wordExportMode, setWordExportMode] = useState<WordExportMode>('all')
   const [selectedDishIdForWord, setSelectedDishIdForWord] = useState<number | null>(null)
+  const [shoppingOverviewExpanded, setShoppingOverviewExpanded] = useState(false)
+  const [shoppingOverviewFilter, setShoppingOverviewFilter] = useState<'unassigned' | 'all'>('unassigned')
+  const [shoppingOverviewQuery, setShoppingOverviewQuery] = useState('')
+  const [shoppingOverviewShowAll, setShoppingOverviewShowAll] = useState(false)
+  const [shoppingOverviewSelectedIngredients, setShoppingOverviewSelectedIngredients] = useState<Record<string, boolean>>({})
+  const [shoppingOverviewTargetStoreId, setShoppingOverviewTargetStoreId] = useState<number | null>(null)
   const [syncStatus, setSyncStatus] = useState(
     isFirebaseConfigured
       ? 'Firebase 已設定，雲端同步初始化中…'
@@ -1479,6 +1485,68 @@ function App() {
       }))
       .sort((a, b) => a.ingredient.localeCompare(b.ingredient, 'zh-Hant'))
   }, [ingredientAdjustments, ingredientSummaryRows, shoppingStores])
+
+  const unassignedShoppingIngredientCount = useMemo(
+    () => shoppingIngredientOverviewRows.filter((row) => !row.assignedStoreName).length,
+    [shoppingIngredientOverviewRows],
+  )
+
+  const filteredShoppingIngredientOverviewRows = useMemo(() => {
+    const keyword = shoppingOverviewQuery.trim().toLowerCase()
+
+    return shoppingIngredientOverviewRows.filter((row) => {
+      if (shoppingOverviewFilter === 'unassigned' && row.assignedStoreName) {
+        return false
+      }
+
+      if (!keyword) {
+        return true
+      }
+
+      return [row.ingredient, row.note, row.assignedStoreName ?? '']
+        .join(' ')
+        .toLowerCase()
+        .includes(keyword)
+    })
+  }, [shoppingIngredientOverviewRows, shoppingOverviewFilter, shoppingOverviewQuery])
+
+  const visibleShoppingIngredientOverviewRows = useMemo(() => {
+    const shouldLimit =
+      shoppingOverviewFilter === 'unassigned' &&
+      !shoppingOverviewShowAll &&
+      shoppingOverviewQuery.trim().length === 0
+
+    return shouldLimit
+      ? filteredShoppingIngredientOverviewRows.slice(0, 5)
+      : filteredShoppingIngredientOverviewRows
+  }, [filteredShoppingIngredientOverviewRows, shoppingOverviewFilter, shoppingOverviewQuery, shoppingOverviewShowAll])
+
+  const hiddenShoppingIngredientCount = Math.max(
+    filteredShoppingIngredientOverviewRows.length - visibleShoppingIngredientOverviewRows.length,
+    0,
+  )
+
+  const canToggleShoppingOverviewShowAll =
+    shoppingOverviewFilter === 'unassigned' &&
+    shoppingOverviewQuery.trim().length === 0 &&
+    filteredShoppingIngredientOverviewRows.length > 5
+
+  const selectedShoppingOverviewCount = useMemo(
+    () => Object.values(shoppingOverviewSelectedIngredients).filter(Boolean).length,
+    [shoppingOverviewSelectedIngredients],
+  )
+
+  useEffect(() => {
+    if (shoppingStores.length === 0) {
+      setShoppingOverviewTargetStoreId(null)
+      return
+    }
+
+    const hasSelectedStore = shoppingStores.some((store) => store.id === shoppingOverviewTargetStoreId)
+    if (!hasSelectedStore) {
+      setShoppingOverviewTargetStoreId(shoppingStores[0].id)
+    }
+  }, [shoppingOverviewTargetStoreId, shoppingStores])
 
   const summaryIngredientSet = useMemo(
     () => new Set(uniqueSummaryIngredients),
@@ -2324,6 +2392,48 @@ function App() {
         }
       }),
     )
+  }
+
+  const addSelectedShoppingOverviewIngredientsToStore = () => {
+    if (shoppingOverviewTargetStoreId === null) {
+      return
+    }
+
+    const selectedIngredients = visibleShoppingIngredientOverviewRows
+      .filter((row) => shoppingOverviewSelectedIngredients[row.ingredient])
+      .map((row) => row.ingredient)
+
+    if (selectedIngredients.length === 0) {
+      return
+    }
+
+    setShoppingStores((prev) =>
+      prev.map((store) => {
+        if (store.id !== shoppingOverviewTargetStoreId) {
+          return store
+        }
+
+        const existingIngredients = new Set(store.items.map((item) => item.ingredient.trim()).filter(Boolean))
+        const nextItems = [...store.items]
+
+        selectedIngredients.forEach((ingredient) => {
+          if (existingIngredients.has(ingredient)) {
+            return
+          }
+
+          existingIngredients.add(ingredient)
+          nextItems.push({ id: Date.now() + nextItems.length, ingredient, price: '', ownedQty: '' })
+        })
+
+        return {
+          ...store,
+          items: nextItems,
+        }
+      }),
+    )
+
+    setShoppingOverviewSelectedIngredients({})
+    setShoppingOverviewShowAll(false)
   }
 
   const removeShoppingStoreItem = (storeId: number, itemId: number) => {
@@ -3717,35 +3827,187 @@ function App() {
             已選過的食材會反灰，避免同一項食材被重複分派到不同商店。
           </p>
 
-          <div className="table-wrap section-gap">
-            <table>
-              <thead>
-                <tr>
-                  <th>食材</th>
-                  <th>需求總量</th>
-                  <th>備註</th>
-                  <th>已分配商店</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shoppingIngredientOverviewRows.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="empty">
-                      目前沒有可採買的食材摘要
-                    </td>
-                  </tr>
+          <section className="shopping-overview panel section-gap">
+            <div className="section-header shopping-overview-header">
+              <div>
+                <h3 className="shopping-overview-title">採買摘要</h3>
+                <p className="hint shopping-overview-hint">
+                  共 {shoppingIngredientOverviewRows.length} 項，未分配 {unassignedShoppingIngredientCount} 項。
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShoppingOverviewExpanded((previous) => !previous)}
+              >
+                {shoppingOverviewExpanded ? '收合摘要' : '展開摘要'}
+              </button>
+            </div>
+
+            {shoppingOverviewExpanded && (
+              <>
+                <div className="shopping-overview-toolbar">
+                  <div className="shopping-overview-filters">
+                    <button
+                      type="button"
+                      className={shoppingOverviewFilter === 'unassigned' ? 'word-export-mode-active' : 'btn-secondary'}
+                      onClick={() => {
+                        setShoppingOverviewFilter('unassigned')
+                        setShoppingOverviewShowAll(false)
+                      }}
+                    >
+                      只看未分配
+                    </button>
+                    <button
+                      type="button"
+                      className={shoppingOverviewFilter === 'all' ? 'word-export-mode-active' : 'btn-secondary'}
+                      onClick={() => {
+                        setShoppingOverviewFilter('all')
+                        setShoppingOverviewShowAll(true)
+                      }}
+                    >
+                      顯示全部
+                    </button>
+                  </div>
+                  <input
+                    className="shopping-overview-search"
+                    value={shoppingOverviewQuery}
+                    onChange={(event) => setShoppingOverviewQuery(event.target.value)}
+                    placeholder="搜尋食材 / 備註 / 商店"
+                  />
+                </div>
+
+                {shoppingOverviewFilter === 'unassigned' ? (
+                  <>
+                    <div className="shopping-overview-bulk-bar">
+                      <div className="shopping-overview-bulk-actions">
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() =>
+                            setShoppingOverviewSelectedIngredients((previous) => ({
+                              ...previous,
+                              ...Object.fromEntries(
+                                visibleShoppingIngredientOverviewRows.map((row) => [row.ingredient, true]),
+                              ),
+                            }))
+                          }
+                          disabled={visibleShoppingIngredientOverviewRows.length === 0}
+                        >
+                          全選目前顯示
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => setShoppingOverviewSelectedIngredients({})}
+                          disabled={selectedShoppingOverviewCount === 0}
+                        >
+                          清除勾選
+                        </button>
+                      </div>
+                      <div className="shopping-overview-bulk-actions">
+                        <select
+                          value={shoppingOverviewTargetStoreId ?? ''}
+                          onChange={(event) => setShoppingOverviewTargetStoreId(Number(event.target.value) || null)}
+                          disabled={shoppingStores.length === 0}
+                        >
+                          {shoppingStores.length === 0 ? (
+                            <option value="">請先新增商店</option>
+                          ) : (
+                            shoppingStores.map((store) => (
+                              <option key={store.id} value={store.id}>
+                                {store.storeName || '未命名商店'}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={addSelectedShoppingOverviewIngredientsToStore}
+                          disabled={selectedShoppingOverviewCount === 0 || shoppingOverviewTargetStoreId === null}
+                        >
+                          將已勾選食材送進商店清單
+                        </button>
+                      </div>
+                    </div>
+
+                    {visibleShoppingIngredientOverviewRows.length === 0 ? (
+                      <p className="empty">目前沒有符合條件的未分配食材。</p>
+                    ) : (
+                      <div className="shopping-overview-card-grid">
+                        {visibleShoppingIngredientOverviewRows.map((row) => (
+                          <label key={`${row.ingredient}-${row.totalUnit}`} className="shopping-overview-card">
+                            <div className="shopping-overview-card-top">
+                              <input
+                                type="checkbox"
+                                className="prep-checkbox"
+                                checked={Boolean(shoppingOverviewSelectedIngredients[row.ingredient])}
+                                onChange={(event) =>
+                                  setShoppingOverviewSelectedIngredients((previous) => ({
+                                    ...previous,
+                                    [row.ingredient]: event.target.checked,
+                                  }))
+                                }
+                              />
+                              <div>
+                                <strong>{row.ingredient}</strong>
+                                <p className="shopping-overview-card-qty">需求量：{row.requiredDisplay}</p>
+                              </div>
+                            </div>
+                            <p className="shopping-overview-card-meta">備註：{row.note || '無'}</p>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+
+                    {canToggleShoppingOverviewShowAll && (
+                      <div className="actions">
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => setShoppingOverviewShowAll((previous) => !previous)}
+                        >
+                          {shoppingOverviewShowAll
+                            ? '只看前 5 項'
+                            : `再顯示 ${hiddenShoppingIngredientCount} 項未分配食材`}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="table-wrap shopping-overview-table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>食材</th>
+                          <th>需求總量</th>
+                          <th>備註</th>
+                          <th>已分配商店</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredShoppingIngredientOverviewRows.length === 0 && (
+                          <tr>
+                            <td colSpan={4} className="empty">
+                              目前沒有符合條件的食材摘要
+                            </td>
+                          </tr>
+                        )}
+                        {filteredShoppingIngredientOverviewRows.map((row) => (
+                          <tr key={`${row.ingredient}-${row.totalUnit}`}>
+                            <td data-label="食材">{row.ingredient}</td>
+                            <td data-label="需求總量">{row.requiredDisplay}</td>
+                            <td data-label="備註">{row.note || '-'}</td>
+                            <td data-label="已分配商店">{row.assignedStoreName ?? '尚未分配'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
-                {shoppingIngredientOverviewRows.map((row) => (
-                  <tr key={`${row.ingredient}-${row.totalUnit}`}>
-                    <td data-label="食材">{row.ingredient}</td>
-                    <td data-label="需求總量">{row.requiredDisplay}</td>
-                    <td data-label="備註">{row.note || '-'}</td>
-                    <td data-label="已分配商店">{row.assignedStoreName ?? '尚未分配'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              </>
+            )}
+          </section>
 
           {shoppingStores.length === 0 ? (
             <p className="empty">目前沒有商店，請點擊上方按鈕新增商店。</p>

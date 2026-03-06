@@ -412,6 +412,115 @@ h2 {
   flex-wrap: wrap;
 }
 
+.shopping-overview {
+  background: #f8fafc;
+  border-style: dashed;
+}
+
+.shopping-overview-header {
+  align-items: flex-start;
+}
+
+.shopping-overview-title {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--text-main);
+}
+
+.shopping-overview-hint {
+  margin: 6px 0 0;
+}
+
+.shopping-overview-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.shopping-overview-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.shopping-overview-search {
+  max-width: 320px;
+}
+
+.shopping-overview-table-wrap {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid #dbe3ea;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 0 0 4px;
+}
+
+.shopping-overview-bulk-bar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.shopping-overview-bulk-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.shopping-overview-bulk-actions select {
+  min-width: 220px;
+  border: 2px solid var(--input-border);
+  border-radius: 8px;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: #fff;
+  font-size: 1rem;
+}
+
+.shopping-overview-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.shopping-overview-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid #dbe3ea;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.shopping-overview-card:hover {
+  border-color: #9ad6cf;
+  box-shadow: 0 8px 18px rgba(15, 118, 110, 0.12);
+  transform: translateY(-1px);
+}
+
+.shopping-overview-card-top {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.shopping-overview-card-qty,
+.shopping-overview-card-meta {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
 textarea {
   width: 100%;
   background-color: var(--input-bg);
@@ -783,6 +892,26 @@ a:focus-visible {
   .library-add-row, .lock-form {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .shopping-overview-toolbar,
+  .shopping-overview-filters,
+  .shopping-overview-bulk-bar,
+  .shopping-overview-bulk-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .shopping-overview-search {
+    max-width: none;
+  }
+
+  .shopping-overview-bulk-actions select {
+    min-width: 0;
+  }
+
+  .shopping-overview-card-grid {
+    grid-template-columns: 1fr;
   }
   
   /* Responsive Tables */
