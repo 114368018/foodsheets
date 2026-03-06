@@ -33,6 +33,7 @@ const GROUP_TABS = [
   '第七組',
   '學長姐組',
 ] as const
+const NON_SAMPLE_GROUP_TABS = GROUP_TABS.filter((groupName) => groupName !== SAMPLE_GROUP_TAB)
 const SUMMARY_TABS = ['食材總表', '工具總表'] as const
 const TOOL_LIBRARY_TAB = '工具庫' as const
 const INGREDIENT_LIBRARY_TAB = '食材庫' as const
@@ -1219,12 +1220,12 @@ function App() {
   }, [groupData, resolvedThumbnailByUrl, thumbnailFetchFailedByUrl])
 
   const allIngredientRows = useMemo(
-    () => GROUP_TABS.flatMap((groupName) => groupData[groupName].ingredientRows),
+    () => NON_SAMPLE_GROUP_TABS.flatMap((groupName) => groupData[groupName].ingredientRows),
     [groupData],
   )
 
   const allToolRows = useMemo(
-    () => GROUP_TABS.flatMap((groupName) => groupData[groupName].toolRows),
+    () => NON_SAMPLE_GROUP_TABS.flatMap((groupName) => groupData[groupName].toolRows),
     [groupData],
   )
 
@@ -1315,7 +1316,7 @@ function App() {
 
   const ingredientLibraryByGroup = useMemo(
     () =>
-      GROUP_TABS.map((groupName) => {
+      NON_SAMPLE_GROUP_TABS.map((groupName) => {
         const group = groupData[groupName]
         const dishNameById = new Map(
           group.dishes.map((dish, index) => [dish.id, dish.title.trim() || `料理${index + 1}`]),
@@ -1344,7 +1345,7 @@ function App() {
 
   const toolLibraryByGroup = useMemo(
     () =>
-      GROUP_TABS.map((groupName) => {
+      NON_SAMPLE_GROUP_TABS.map((groupName) => {
         const group = groupData[groupName]
 
         const rows: GroupToolLibraryRow[] = group.toolRows
@@ -1370,6 +1371,11 @@ function App() {
     ingredientSummaryRows.forEach((r) => list.add(r.ingredient))
     return Array.from(list).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
   }, [ingredientSummaryRows])
+
+  const summaryIngredientSet = useMemo(
+    () => new Set(uniqueSummaryIngredients),
+    [uniqueSummaryIngredients],
+  )
 
   const visibleTabs: TabName[] = adminUnlocked
     ? [
@@ -2159,13 +2165,13 @@ function App() {
     const assigned = new Set<string>()
     shoppingStores.forEach((store) => {
       store.items.forEach((item) => {
-        if (item.ingredient) {
+        if (item.ingredient && summaryIngredientSet.has(item.ingredient)) {
           assigned.add(item.ingredient)
         }
       })
     })
     return assigned
-  }, [shoppingStores])
+  }, [shoppingStores, summaryIngredientSet])
 
   const exportGroupRecipesToWord = async (
     groupName: GroupTab,
@@ -3406,7 +3412,12 @@ function App() {
           ) : (
             <div className="shopping-stores-list" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
               {shoppingStores.map((store) => {
-                const storeTotal = store.items.reduce((sum, item) => sum + toNumber(item.price), 0)
+                const storeTotal = store.items.reduce((sum, item) => {
+                  if (!summaryIngredientSet.has(item.ingredient)) {
+                    return sum
+                  }
+                  return sum + toNumber(item.price)
+                }, 0)
 
                 return (
                   <article key={store.id} className="panel">

@@ -6,6 +6,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
+    version: 'v2.1.1',
+    date: '2026-03-06',
+    changes: [
+      '範例組資料改為純展示用途，不再納入各組食材表、各組工具表、食材總表、工具總表。',
+      '食材採買改為僅使用非範例組的食材來源，範例組食材不再影響已排定與商店總額計算。',
+    ],
+  },
+  {
     version: 'v2.1.0',
     date: '2026-03-06',
     changes: [
