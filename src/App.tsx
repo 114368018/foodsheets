@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { deleteDoc, doc, onSnapshot, setDoc } from 'firebase/firestore'
 import {
   AlignmentType,
@@ -14,6 +14,20 @@ import {
 import { INGREDIENT_LIBRARY_SEED } from './ingredient-library'
 import { TOOL_LIBRARY_SEED } from './tool-library'
 import { CHANGELOG_ENTRIES } from './changelog'
+import ItemQuickList from './components/ItemQuickList'
+import ShoppingBoard, { type ShoppingNeed, type ShoppingStore } from './components/ShoppingBoard'
+import {
+  INGREDIENT_UNIT_CHIPS,
+  TOOL_UNIT_CHIPS,
+  VAGUE_QTY,
+  formatQuantity,
+  guessUnit,
+  normalizeNameKey,
+  normalizeUnitText,
+  parseQuantity,
+  toBaseUnit,
+  type ItemDraft,
+} from './item-input'
 import {
   db,
   firebaseProjectDocId,
@@ -60,20 +74,6 @@ type TabName =
   | typeof CHANGELOG_TAB
   | typeof SHOPPING_LIST_TAB
 
-type ShoppingStoreItem = {
-  id: number
-  ingredient: string
-  price: string
-  ownedQty?: string
-  purchased?: boolean
-}
-
-type ShoppingStore = {
-  id: number
-  storeName: string
-  items: ShoppingStoreItem[]
-}
-
 type IngredientRow = {
   id: number
   dishId: number
@@ -93,28 +93,31 @@ type ToolRow = {
   note: string
 }
 
+// One line per ingredient name + (base) unit, summed across all groups.
 type IngredientSummaryRow = {
+  key: string
   ingredient: string
-  perServingUnit: string
-  totalUnit: string
+  unit: string
+  sumQty: number
+  hasVague: boolean
+  missingQtyCount: number
   note: string
-  sumPerServingQty: number
-  sumTotalQty: number
+  sources: string[]
 }
 
 type ToolSummaryRow = {
+  key: string
   tool: string
   unit: string
   note: string
   sumQty: number
+  sources: string[]
 }
 
 type GroupIngredientLibraryRow = {
   id: number
   dishName: string
   ingredient: string
-  perServingQty: string
-  perServingUnit: string
   totalQty: string
   totalUnit: string
   note: string
@@ -167,14 +170,13 @@ type PersistedState = {
   shoppingStores: ShoppingStore[]
 }
 
-type ShoppingIngredientOverviewRow = {
-  ingredient: string
-  requiredTotal: number
-  totalUnit: string
-  requiredDisplay: string
-  note: string
-  assignedStoreName: string | null
+type ToastState = {
+  id: number
+  message: string
+  undo?: () => void
 }
+
+type SaveState = 'local' | 'saving' | 'saved' | 'error'
 
 type GroupCollapseState = {
   dishCollapsedById: Record<number, boolean>
@@ -293,24 +295,37 @@ const normalizeToolLibrary = (input: unknown): string[] => {
   return Array.from(unique.values()).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
 }
 
-const emptyIngredientRow = (id: number, dishId: number): IngredientRow => ({
+let lastCreatedId = 0
+
+// Date.now() alone collides when several rows are created in the same millisecond (batch paste).
+const createId = (): number => {
+  lastCreatedId = Math.max(Date.now(), lastCreatedId + 1)
+  return lastCreatedId
+}
+
+const ingredientRowFromDraft = (id: number, dishId: number, draft: ItemDraft): IngredientRow => ({
   id,
   dishId,
-  ingredient: '',
+  ingredient: draft.name,
   perServingQty: '',
   perServingUnit: '',
-  totalQty: '',
-  totalUnit: '',
-  note: '',
+  totalQty: draft.qty,
+  totalUnit: draft.unit,
+  note: draft.note,
 })
 
-const emptyToolRow = (id: number): ToolRow => ({
+const toolRowFromDraft = (id: number, draft: ItemDraft): ToolRow => ({
   id,
-  tool: '',
-  qty: '',
-  unit: '',
-  note: '',
+  tool: draft.name,
+  qty: draft.qty,
+  unit: draft.unit,
+  note: draft.note,
 })
+
+const isBlankIngredientRow = (row: IngredientRow) =>
+  !row.ingredient.trim() && !row.totalQty.trim() && !row.totalUnit.trim() && !row.note.trim()
+
+const isBlankToolRow = (row: ToolRow) => !row.tool.trim() && !row.qty.trim() && !row.unit.trim() && !row.note.trim()
 
 const emptyDish = (id: number): Dish => ({
   id,
@@ -541,8 +556,8 @@ const createInitialGroupData = (): Record<GroupTab, GroupData> => {
         teamName: '',
         cuisineType: '',
         dishes,
-        ingredientRows: dishes.map((dish, dishIndex) => emptyIngredientRow(offset + 1 + dishIndex, dish.id)),
-        toolRows: [emptyToolRow(offset + 101), emptyToolRow(offset + 102)],
+        ingredientRows: [],
+        toolRows: [],
       }
       return acc
     },
@@ -612,7 +627,10 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
       : base[groupName].ingredientRows
 
     const validDishIds = new Set(normalizedDishes.map((dish) => dish.id))
-    const sanitizedIngredientRows = normalizedIngredientRows.filter((row) => validDishIds.has(row.dishId))
+    // Older versions kept an empty placeholder row per dish; the quick-add UI no longer needs them.
+    const sanitizedIngredientRows = normalizedIngredientRows.filter(
+      (row) => validDishIds.has(row.dishId) && !isBlankIngredientRow(row),
+    )
 
     const normalizedToolRows = Array.isArray(sourceObj.toolRows)
       ? sourceObj.toolRows.map((row, rowIndex) => {
@@ -631,9 +649,8 @@ const normalizeGroupData = (input: unknown): Record<GroupTab, GroupData> => {
       teamName: typeof sourceObj.teamName === 'string' ? sourceObj.teamName : '',
       cuisineType: typeof sourceObj.cuisineType === 'string' ? sourceObj.cuisineType : '',
       dishes: normalizedDishes,
-      ingredientRows:
-        sanitizedIngredientRows.length > 0 ? sanitizedIngredientRows : base[groupName].ingredientRows,
-      toolRows: normalizedToolRows.length > 0 ? normalizedToolRows : base[groupName].toolRows,
+      ingredientRows: sanitizedIngredientRows,
+      toolRows: normalizedToolRows.filter((row) => !isBlankToolRow(row)),
     }
   })
 
@@ -704,24 +721,34 @@ const mergeRemoteWithLocalImages = (
   return merged
 }
 
-const stripImagesForCloud = (data: Record<GroupTab, GroupData>): Record<GroupTab, GroupData> => {
-  const stripped = { ...data }
+const stripGroupImagesForCloud = (group: GroupData): GroupData => ({
+  ...group,
+  dishes: group.dishes.map((dish) => ({
+    ...dish,
+    images: uniqueDishImages(dish.images)
+      .filter((image) => image.url.startsWith('https://') || image.url.startsWith('http://'))
+      .map((image) => ({ url: image.url, publicId: image.publicId }))
+      .slice(0, 2),
+  })),
+})
 
-  GROUP_TABS.forEach((groupName) => {
-    stripped[groupName] = {
-      ...data[groupName],
-      dishes: data[groupName].dishes.map((dish) => ({
-        ...dish,
-        images: uniqueDishImages(dish.images)
-          .filter((image) => image.url.startsWith('https://') || image.url.startsWith('http://'))
-          .map((image) => ({ url: image.url, publicId: image.publicId }))
-          .slice(0, 2),
-      })),
-    }
-  })
+const SHARED_FIELDS = [
+  'ingredientAdjustments',
+  'toolAdjustments',
+  'toolLibrary',
+  'ingredientLibrary',
+  'preparedSummaryIngredients',
+  'preparedSummaryTools',
+  'preparedGroupIngredients',
+  'preparedGroupTools',
+  'shoppingStores',
+] as const
 
-  return stripped
-}
+type SharedField = (typeof SHARED_FIELDS)[number]
+type CloudState = Omit<PersistedState, 'currentTab'>
+type CloudShared = Pick<CloudState, SharedField>
+
+const groupSyncKey = (groupName: GroupTab) => `group:${groupName}`
 
 const compressImageFile = (file: File, maxSize = 1280, quality = 0.82): Promise<Blob> => {
   return new Promise((resolve, reject) => {
@@ -1190,12 +1217,8 @@ function App() {
   const [showWordExportOptions, setShowWordExportOptions] = useState(false)
   const [wordExportMode, setWordExportMode] = useState<WordExportMode>('all')
   const [selectedDishIdForWord, setSelectedDishIdForWord] = useState<number | null>(null)
-  const [shoppingOverviewExpanded, setShoppingOverviewExpanded] = useState(false)
-  const [shoppingOverviewFilter, setShoppingOverviewFilter] = useState<'unassigned' | 'all'>('unassigned')
-  const [shoppingOverviewQuery, setShoppingOverviewQuery] = useState('')
-  const [shoppingOverviewShowAll, setShoppingOverviewShowAll] = useState(false)
-  const [shoppingOverviewSelectedIngredients, setShoppingOverviewSelectedIngredients] = useState<Record<string, boolean>>({})
-  const [shoppingOverviewTargetStoreId, setShoppingOverviewTargetStoreId] = useState<number | null>(null)
+  const [toast, setToast] = useState<ToastState | null>(null)
+  const [saveState, setSaveState] = useState<SaveState>(isFirebaseConfigured ? 'saved' : 'local')
   const [syncStatus, setSyncStatus] = useState(
     isFirebaseConfigured
       ? 'Firebase 已設定，雲端同步初始化中…'
@@ -1209,6 +1232,22 @@ function App() {
   const pendingRemovedDishIdsRef = useRef<Set<number>>(new Set())
   const thumbnailInFlightRef = useRef<Set<string>>(new Set())
   const dangerHoldTimerRef = useRef<number | null>(null)
+  // JSON of what we last saw in / wrote to Firestore, per group and per shared field.
+  // A local value that differs from it has unsaved edits and must not be overwritten by a snapshot.
+  const lastSyncedRef = useRef<Record<string, string>>({})
+  const latestStateRef = useRef<Omit<PersistedState, 'currentTab'> | null>(null)
+
+  const showToast = (message: string, undo?: () => void) => {
+    setToast({ id: createId(), message, undo })
+  }
+
+  useEffect(() => {
+    if (!toast) {
+      return
+    }
+    const timer = window.setTimeout(() => setToast(null), toast.undo ? 6000 : 3500)
+    return () => window.clearTimeout(timer)
+  }, [toast])
 
   const activeGroup: GroupTab = GROUP_TABS.includes(currentTab as GroupTab)
     ? (currentTab as GroupTab)
@@ -1282,100 +1321,243 @@ function App() {
     }
   }, [groupData, resolvedThumbnailByUrl, thumbnailFetchFailedByUrl])
 
-  const allIngredientRows = useMemo(
-    () => NON_SAMPLE_GROUP_TABS.flatMap((groupName) => groupData[groupName].ingredientRows),
-    [groupData],
-  )
-
-  const allToolRows = useMemo(
-    () => NON_SAMPLE_GROUP_TABS.flatMap((groupName) => groupData[groupName].toolRows),
-    [groupData],
-  )
-
   const ingredientSummaryRows = useMemo<IngredientSummaryRow[]>(() => {
-    const map = new Map<string, IngredientSummaryRow>()
+    type Accumulator = {
+      row: IngredientSummaryRow
+      notes: Set<string>
+      perGroup: Map<string, { qty: number; vague: boolean; missing: boolean }>
+    }
+    const map = new Map<string, Accumulator>()
 
-    allIngredientRows.forEach((row) => {
-      const ingredientName = row.ingredient.trim()
-      if (!ingredientName || !row.totalQty.trim()) {
-        return
-      }
+    NON_SAMPLE_GROUP_TABS.forEach((groupName) => {
+      groupData[groupName].ingredientRows.forEach((row) => {
+        const ingredientName = row.ingredient.trim()
+        if (!ingredientName) {
+          return
+        }
 
-      const key = [
-        ingredientName.toLowerCase(),
-        row.perServingUnit.trim().toLowerCase(),
-        row.totalUnit.trim().toLowerCase(),
-        row.note.trim().toLowerCase(),
-      ].join('|')
+        const qtyText = row.totalQty.trim()
+        const qtyValue = parseQuantity(qtyText)
+        const { base, factor } = toBaseUnit(row.totalUnit)
+        const key = `${normalizeNameKey(ingredientName)}|${base}`
 
-      if (!map.has(key)) {
-        map.set(key, {
-          ingredient: ingredientName,
-          perServingUnit: row.perServingUnit.trim(),
-          totalUnit: row.totalUnit.trim(),
-          note: row.note.trim(),
-          sumPerServingQty: 0,
-          sumTotalQty: 0,
-        })
-      }
+        let entry = map.get(key)
+        if (!entry) {
+          entry = {
+            row: {
+              key,
+              ingredient: ingredientName,
+              unit: base,
+              sumQty: 0,
+              hasVague: false,
+              missingQtyCount: 0,
+              note: '',
+              sources: [],
+            },
+            notes: new Set(),
+            perGroup: new Map(),
+          }
+          map.set(key, entry)
+        }
 
-      const target = map.get(key)
-      if (!target) {
-        return
-      }
+        const groupEntry = entry.perGroup.get(groupName) ?? { qty: 0, vague: false, missing: false }
+        if (!qtyText) {
+          entry.row.missingQtyCount += 1
+          groupEntry.missing = true
+        } else if (qtyValue === null) {
+          entry.row.hasVague = true
+          groupEntry.vague = true
+        } else {
+          entry.row.sumQty += qtyValue * factor
+          groupEntry.qty += qtyValue * factor
+        }
+        entry.perGroup.set(groupName, groupEntry)
 
-      target.sumPerServingQty += toNumber(row.perServingQty)
-      target.sumTotalQty += toNumber(row.totalQty)
+        if (row.note.trim()) {
+          entry.notes.add(row.note.trim())
+        }
+      })
     })
 
-    return Array.from(map.values()).sort((a, b) => a.ingredient.localeCompare(b.ingredient, 'zh-Hant'))
-  }, [allIngredientRows])
+    return Array.from(map.values())
+      .map(({ row, notes, perGroup }) => ({
+        ...row,
+        note: Array.from(notes).join(' / '),
+        sources: Array.from(perGroup.entries()).map(([groupName, value]) => {
+          const parts = [
+            value.qty > 0 ? formatQuantity(value.qty, row.unit) : '',
+            value.vague ? VAGUE_QTY : '',
+            value.missing ? '未填數量' : '',
+          ].filter(Boolean)
+          return `${groupName} ${parts.join(' + ')}`
+        }),
+      }))
+      .sort((a, b) => a.ingredient.localeCompare(b.ingredient, 'zh-Hant'))
+  }, [groupData])
 
   const toolSummaryRows = useMemo<ToolSummaryRow[]>(() => {
-    const map = new Map<string, ToolSummaryRow>()
+    const map = new Map<string, ToolSummaryRow & { notes: Set<string> }>()
 
-    allToolRows.forEach((row) => {
-      const toolName = row.tool.trim()
-      if (!toolName || !row.qty.trim()) {
-        return
-      }
+    NON_SAMPLE_GROUP_TABS.forEach((groupName) => {
+      groupData[groupName].toolRows.forEach((row) => {
+        const toolName = row.tool.trim()
+        if (!toolName || !row.qty.trim()) {
+          return
+        }
 
-      const key = [toolName.toLowerCase(), row.unit.trim().toLowerCase(), row.note.trim().toLowerCase()].join('|')
+        const unit = normalizeUnitText(row.unit)
+        const key = `${normalizeNameKey(toolName)}|${unit}`
+        let entry = map.get(key)
+        if (!entry) {
+          entry = { key, tool: toolName, unit, note: '', sumQty: 0, sources: [], notes: new Set() }
+          map.set(key, entry)
+        }
 
-      if (!map.has(key)) {
-        map.set(key, {
-          tool: toolName,
-          unit: row.unit.trim(),
-          note: row.note.trim(),
-          sumQty: 0,
-        })
-      }
-
-      const target = map.get(key)
-      if (!target) {
-        return
-      }
-
-      target.sumQty += toNumber(row.qty)
+        const qty = parseQuantity(row.qty) ?? 0
+        entry.sumQty += qty
+        entry.sources.push(`${groupName} ${row.qty.trim()}${unit ? ` ${unit}` : ''}`)
+        if (row.note.trim()) {
+          entry.notes.add(row.note.trim())
+        }
+      })
     })
 
-    return Array.from(map.values()).sort((a, b) => a.tool.localeCompare(b.tool, 'zh-Hant'))
-  }, [allToolRows])
+    return Array.from(map.values())
+      .map(({ notes, ...row }) => ({ ...row, note: Array.from(notes).join(' / ') }))
+      .sort((a, b) => a.tool.localeCompare(b.tool, 'zh-Hant'))
+  }, [groupData])
 
-  const invalidIngredientRowIds = useMemo(
-    () =>
-      new Set(
-        activeIngredientRows
-          .filter((row) => row.ingredient.trim() && !row.totalQty.trim())
-          .map((row) => row.id),
-      ),
-    [activeIngredientRows],
+  const shoppingNeeds = useMemo<ShoppingNeed[]>(() => {
+    type NeedAccumulator = {
+      name: string
+      parts: Array<{ unit: string; qty: number }>
+      hasVague: boolean
+      hasMissingQty: boolean
+      notes: Set<string>
+      sources: string[]
+    }
+    const byName = new Map<string, NeedAccumulator>()
+
+    ingredientSummaryRows.forEach((row) => {
+      const nameKey = normalizeNameKey(row.ingredient)
+      const finalQty = row.sumQty + toNumber(ingredientAdjustments[row.key] ?? '')
+      const entry = byName.get(nameKey) ?? {
+        name: row.ingredient,
+        parts: [],
+        hasVague: false,
+        hasMissingQty: false,
+        notes: new Set<string>(),
+        sources: [],
+      }
+
+      if (finalQty > 0) {
+        entry.parts.push({ unit: row.unit, qty: finalQty })
+      }
+      entry.hasVague ||= row.hasVague
+      entry.hasMissingQty ||= row.missingQtyCount > 0
+      if (row.note) {
+        entry.notes.add(row.note)
+      }
+      entry.sources.push(...row.sources)
+      byName.set(nameKey, entry)
+    })
+
+    return Array.from(byName.entries())
+      .map(([key, entry]) => {
+        const amounts = entry.parts.map((part) => formatQuantity(part.qty, part.unit))
+        if (entry.hasVague) {
+          amounts.push(VAGUE_QTY)
+        }
+        return {
+          key,
+          name: entry.name,
+          display: amounts.length > 0 ? amounts.join(' + ') : '數量未填',
+          single: entry.parts.length === 1 ? entry.parts[0] : null,
+          note: Array.from(entry.notes).join(' / '),
+          sources: entry.sources,
+          hasMissingQty: entry.hasMissingQty,
+        }
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'))
+  }, [ingredientAdjustments, ingredientSummaryRows])
+
+  // Most common unit each name was entered with, so a new entry defaults to what others used.
+  const unitUsage = useMemo(() => {
+    const ingredient = new Map<string, Map<string, number>>()
+    const tool = new Map<string, Map<string, number>>()
+    const count = (target: Map<string, Map<string, number>>, name: string, unit: string) => {
+      const key = normalizeNameKey(name)
+      const trimmedUnit = unit.trim()
+      if (!key || !trimmedUnit) {
+        return
+      }
+      const counts = target.get(key) ?? new Map<string, number>()
+      counts.set(trimmedUnit, (counts.get(trimmedUnit) ?? 0) + 1)
+      target.set(key, counts)
+    }
+
+    GROUP_TABS.forEach((groupName) => {
+      groupData[groupName].ingredientRows.forEach((row) => count(ingredient, row.ingredient, row.totalUnit))
+      groupData[groupName].toolRows.forEach((row) => count(tool, row.tool, row.unit))
+    })
+    return { ingredient, tool }
+  }, [groupData])
+
+  const suggestIngredientUnit = useCallback(
+    (name: string) => {
+      const counts = unitUsage.ingredient.get(normalizeNameKey(name))
+      const learned = counts ? [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] : undefined
+      return learned ?? guessUnit(name, 'ingredient')
+    },
+    [unitUsage],
   )
 
-  const invalidToolRowIds = useMemo(
-    () => new Set(activeToolRows.filter((row) => row.tool.trim() && !row.qty.trim()).map((row) => row.id)),
-    [activeToolRows],
+  const suggestToolUnit = useCallback(
+    (name: string) => {
+      const counts = unitUsage.tool.get(normalizeNameKey(name))
+      const learned = counts ? [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] : undefined
+      return learned ?? guessUnit(name, 'tool')
+    },
+    [unitUsage],
   )
+
+  // Library plus anything other groups typed, so custom names show up as suggestions too.
+  const ingredientSuggestions = useMemo(() => {
+    const used = GROUP_TABS.flatMap((groupName) => groupData[groupName].ingredientRows.map((row) => row.ingredient))
+    return normalizeIngredientLibrary([...ingredientLibrary, ...used])
+  }, [groupData, ingredientLibrary])
+
+  const toolSuggestions = useMemo(() => {
+    const used = GROUP_TABS.flatMap((groupName) => groupData[groupName].toolRows.map((row) => row.tool))
+    return normalizeToolLibrary([...toolLibrary, ...used])
+  }, [groupData, toolLibrary])
+
+  const activeGroupChecklist = useMemo(() => {
+    const group = groupData[activeGroup]
+    const items: Array<{ label: string; done: boolean; targetId: string }> = [
+      { label: '廚神名字', done: Boolean(group.teamName.trim()), targetId: 'group-meta' },
+      { label: '料理種類', done: Boolean(group.cuisineType.trim()), targetId: 'group-meta' },
+    ]
+
+    group.dishes.forEach((dish, index) => {
+      const dishLabel = dish.title.trim() || `料理${index + 1}`
+      const rows = group.ingredientRows.filter((row) => row.dishId === dish.id && row.ingredient.trim())
+      const missingQty = rows.filter((row) => !row.totalQty.trim()).length
+      items.push({ label: `料理${index + 1} 名稱`, done: Boolean(dish.title.trim()), targetId: `dish-${dish.id}` })
+      items.push({
+        label: rows.length === 0 ? `${dishLabel} 的食材` : `${dishLabel} 食材數量（${missingQty} 項未填）`,
+        done: rows.length > 0 && missingQty === 0,
+        targetId: `dish-${dish.id}`,
+      })
+    })
+
+    const toolsMissingQty = group.toolRows.filter((row) => row.tool.trim() && !row.qty.trim()).length
+    if (toolsMissingQty > 0) {
+      items.push({ label: `工具數量（${toolsMissingQty} 項未填）`, done: false, targetId: 'group-tools' })
+    }
+
+    return items
+  }, [activeGroup, groupData])
 
   const ingredientLibraryByGroup = useMemo(
     () =>
@@ -1391,8 +1573,6 @@ function App() {
             id: row.id,
             dishName: dishNameById.get(row.dishId) ?? '未指定料理',
             ingredient: row.ingredient.trim(),
-            perServingQty: row.perServingQty.trim(),
-            perServingUnit: row.perServingUnit.trim(),
             totalQty: row.totalQty.trim(),
             totalUnit: row.totalUnit.trim(),
             note: row.note.trim(),
@@ -1429,130 +1609,6 @@ function App() {
     [groupData],
   )
 
-  const uniqueSummaryIngredients = useMemo(() => {
-    const list = new Set<string>()
-    ingredientSummaryRows.forEach((r) => list.add(r.ingredient))
-    return Array.from(list).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
-  }, [ingredientSummaryRows])
-
-  const shoppingIngredientOverviewRows = useMemo<ShoppingIngredientOverviewRow[]>(() => {
-    const grouped = new Map<string, ShoppingIngredientOverviewRow>()
-    const assignedStoreNameByIngredient = new Map<string, string>()
-
-    shoppingStores.forEach((store) => {
-      store.items.forEach((item) => {
-        const ingredientName = item.ingredient.trim()
-        if (!ingredientName || assignedStoreNameByIngredient.has(ingredientName)) {
-          return
-        }
-
-        assignedStoreNameByIngredient.set(ingredientName, store.storeName.trim() || '未命名商店')
-      })
-    })
-
-    ingredientSummaryRows.forEach((row) => {
-      const key = `${row.ingredient}-${row.perServingUnit}-${row.totalUnit}-${row.note}`
-      const adjustment = toNumber(ingredientAdjustments[key] ?? '')
-      const finalTotal = row.sumTotalQty + adjustment
-      const groupKey = `${row.ingredient.toLowerCase()}|${row.totalUnit.trim().toLowerCase()}`
-      const existing = grouped.get(groupKey)
-
-      if (!existing) {
-        grouped.set(groupKey, {
-          ingredient: row.ingredient,
-          requiredTotal: finalTotal,
-          totalUnit: row.totalUnit.trim(),
-          requiredDisplay: '',
-          note: row.note.trim(),
-          assignedStoreName: assignedStoreNameByIngredient.get(row.ingredient) ?? null,
-        })
-        return
-      }
-
-      existing.requiredTotal += finalTotal
-      if (row.note.trim()) {
-        existing.note = [existing.note, row.note.trim()].filter(Boolean).join(' / ')
-      }
-      if (!existing.assignedStoreName) {
-        existing.assignedStoreName = assignedStoreNameByIngredient.get(row.ingredient) ?? null
-      }
-    })
-
-    return Array.from(grouped.values())
-      .map((row) => ({
-        ...row,
-        requiredDisplay: `${formatNumber(row.requiredTotal)}${row.totalUnit ? ` ${row.totalUnit}` : ''}`.trim(),
-      }))
-      .sort((a, b) => a.ingredient.localeCompare(b.ingredient, 'zh-Hant'))
-  }, [ingredientAdjustments, ingredientSummaryRows, shoppingStores])
-
-  const unassignedShoppingIngredientCount = useMemo(
-    () => shoppingIngredientOverviewRows.filter((row) => !row.assignedStoreName).length,
-    [shoppingIngredientOverviewRows],
-  )
-
-  const filteredShoppingIngredientOverviewRows = useMemo(() => {
-    const keyword = shoppingOverviewQuery.trim().toLowerCase()
-
-    return shoppingIngredientOverviewRows.filter((row) => {
-      if (shoppingOverviewFilter === 'unassigned' && row.assignedStoreName) {
-        return false
-      }
-
-      if (!keyword) {
-        return true
-      }
-
-      return [row.ingredient, row.note, row.assignedStoreName ?? '']
-        .join(' ')
-        .toLowerCase()
-        .includes(keyword)
-    })
-  }, [shoppingIngredientOverviewRows, shoppingOverviewFilter, shoppingOverviewQuery])
-
-  const visibleShoppingIngredientOverviewRows = useMemo(() => {
-    const shouldLimit =
-      shoppingOverviewFilter === 'unassigned' &&
-      !shoppingOverviewShowAll &&
-      shoppingOverviewQuery.trim().length === 0
-
-    return shouldLimit
-      ? filteredShoppingIngredientOverviewRows.slice(0, 5)
-      : filteredShoppingIngredientOverviewRows
-  }, [filteredShoppingIngredientOverviewRows, shoppingOverviewFilter, shoppingOverviewQuery, shoppingOverviewShowAll])
-
-  const hiddenShoppingIngredientCount = Math.max(
-    filteredShoppingIngredientOverviewRows.length - visibleShoppingIngredientOverviewRows.length,
-    0,
-  )
-
-  const canToggleShoppingOverviewShowAll =
-    shoppingOverviewFilter === 'unassigned' &&
-    shoppingOverviewQuery.trim().length === 0 &&
-    filteredShoppingIngredientOverviewRows.length > 5
-
-  const selectedShoppingOverviewCount = useMemo(
-    () => Object.values(shoppingOverviewSelectedIngredients).filter(Boolean).length,
-    [shoppingOverviewSelectedIngredients],
-  )
-
-  useEffect(() => {
-    if (shoppingStores.length === 0) {
-      setShoppingOverviewTargetStoreId(null)
-      return
-    }
-
-    const hasSelectedStore = shoppingStores.some((store) => store.id === shoppingOverviewTargetStoreId)
-    if (!hasSelectedStore) {
-      setShoppingOverviewTargetStoreId(shoppingStores[0].id)
-    }
-  }, [shoppingOverviewTargetStoreId, shoppingStores])
-
-  const summaryIngredientSet = useMemo(
-    () => new Set(uniqueSummaryIngredients),
-    [uniqueSummaryIngredients],
-  )
-
   const visibleTabs: TabName[] = adminUnlocked
     ? [
         ...GROUP_TABS,
@@ -1567,95 +1623,92 @@ function App() {
       ]
     : [...GROUP_TABS, CHANGELOG_TAB]
 
-  const updateIngredientRow = (
+  type QuickItemPatch = Partial<{ name: string; qty: string; unit: string; note: string }>
+
+  const setGroupRows = <K extends 'ingredientRows' | 'toolRows'>(
     groupName: GroupTab,
-    id: number,
-    field: keyof IngredientRow,
-    value: string,
+    field: K,
+    update: (rows: GroupData[K]) => GroupData[K],
   ) => {
     setGroupData((previous) => ({
       ...previous,
       [groupName]: {
         ...previous[groupName],
-        ingredientRows: previous[groupName].ingredientRows.map((row) =>
-          row.id === id ? { ...row, [field]: value } : row,
-        ),
+        [field]: update(previous[groupName][field]),
       },
     }))
   }
 
-  const updateToolRow = (groupName: GroupTab, id: number, field: keyof ToolRow, value: string) => {
-    setGroupData((previous) => ({
-      ...previous,
-      [groupName]: {
-        ...previous[groupName],
-        toolRows: previous[groupName].toolRows.map((row) =>
-          row.id === id ? { ...row, [field]: value } : row,
-        ),
-      },
-    }))
+  const createIngredientRows = (groupName: GroupTab, dishId: number, drafts: ItemDraft[]): number[] => {
+    const ids = drafts.map(() => createId())
+    setGroupRows(groupName, 'ingredientRows', (rows) => [
+      ...rows,
+      ...drafts.map((draft, index) => ingredientRowFromDraft(ids[index], dishId, draft)),
+    ])
+    return ids
   }
 
-  const addIngredientRow = (groupName: GroupTab, dishId: number) => {
-    setGroupData((previous) => ({
-      ...previous,
-      [groupName]: {
-        ...previous[groupName],
-        ingredientRows: [...previous[groupName].ingredientRows, emptyIngredientRow(Date.now(), dishId)],
-      },
-    }))
+  const patchIngredientRow = (groupName: GroupTab, id: number, patch: QuickItemPatch) => {
+    setGroupRows(groupName, 'ingredientRows', (rows) =>
+      rows.map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              ingredient: patch.name ?? row.ingredient,
+              totalQty: patch.qty ?? row.totalQty,
+              totalUnit: patch.unit ?? row.totalUnit,
+              note: patch.note ?? row.note,
+            }
+          : row,
+      ),
+    )
   }
 
-  const addToolRow = (groupName: GroupTab) => {
-    setGroupData((previous) => ({
-      ...previous,
-      [groupName]: {
-        ...previous[groupName],
-        toolRows: [...previous[groupName].toolRows, emptyToolRow(Date.now() + 77)],
-      },
-    }))
+  const createToolRows = (groupName: GroupTab, drafts: ItemDraft[]): number[] => {
+    const ids = drafts.map(() => createId())
+    setGroupRows(groupName, 'toolRows', (rows) => [
+      ...rows,
+      ...drafts.map((draft, index) => toolRowFromDraft(ids[index], draft)),
+    ])
+    return ids
   }
 
-  const removeIngredientRow = (groupName: GroupTab, id: number, dishId: number) => {
-    const confirmed = window.confirm('確定要刪除此食材列嗎？')
-    if (!confirmed) {
+  const patchToolRow = (groupName: GroupTab, id: number, patch: QuickItemPatch) => {
+    setGroupRows(groupName, 'toolRows', (rows) =>
+      rows.map((row) =>
+        row.id === id
+          ? {
+              ...row,
+              tool: patch.name ?? row.tool,
+              qty: patch.qty ?? row.qty,
+              unit: patch.unit ?? row.unit,
+              note: patch.note ?? row.note,
+            }
+          : row,
+      ),
+    )
+  }
+
+  // Deleting is instant; the toast offers an undo instead of asking "are you sure?" every time.
+  const removeRowWithUndo = <K extends 'ingredientRows' | 'toolRows'>(groupName: GroupTab, field: K, id: number) => {
+    const rows = groupData[groupName][field] as Array<IngredientRow | ToolRow>
+    const index = rows.findIndex((row) => row.id === id)
+    const removed = rows[index]
+    if (!removed) {
       return
     }
 
-    setGroupData((previous) => {
-      const nextRows = previous[groupName].ingredientRows.filter((row) => row.id !== id)
-      const hasDishRow = nextRows.some((row) => row.dishId === dishId)
-
-      return {
-        ...previous,
-        [groupName]: {
-          ...previous[groupName],
-          ingredientRows:
-            nextRows.length > 0
-              ? hasDishRow
-                ? nextRows
-                : [...nextRows, emptyIngredientRow(Date.now(), dishId)]
-              : [emptyIngredientRow(Date.now(), dishId)],
-        },
-      }
-    })
-  }
-
-  const removeToolRow = (groupName: GroupTab, id: number) => {
-    const confirmed = window.confirm('確定要刪除此工具列嗎？')
-    if (!confirmed) {
-      return
-    }
-
-    setGroupData((previous) => {
-      const nextRows = previous[groupName].toolRows.filter((row) => row.id !== id)
-      return {
-        ...previous,
-        [groupName]: {
-          ...previous[groupName],
-          toolRows: nextRows.length > 0 ? nextRows : [emptyToolRow(Date.now())],
-        },
-      }
+    setGroupRows(groupName, field, (current) => current.filter((row) => row.id !== id) as GroupData[K])
+    const label = 'ingredient' in removed ? removed.ingredient : removed.tool
+    showToast(`已刪除「${label.trim() || '未命名'}」`, () => {
+      setGroupRows(groupName, field, (current) => {
+        if (current.some((row) => row.id === id)) {
+          return current
+        }
+        const next = [...current] as Array<IngredientRow | ToolRow>
+        next.splice(Math.min(index, next.length), 0, removed)
+        return next as GroupData[K]
+      })
     })
   }
 
@@ -2145,6 +2198,18 @@ function App() {
       shoppingStores,
     }
 
+    latestStateRef.current = {
+      groupData,
+      ingredientAdjustments,
+      toolAdjustments,
+      toolLibrary,
+      ingredientLibrary,
+      preparedSummaryIngredients,
+      preparedSummaryTools,
+      preparedGroupIngredients,
+      preparedGroupTools,
+      shoppingStores,
+    }
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
   }, [
     currentTab,
@@ -2216,6 +2281,7 @@ function App() {
           pendingRemovedImageUrlsRef.current.clear()
           pendingRemovedDishIdsRef.current.clear()
           window.localStorage.removeItem(STORAGE_KEY)
+          lastSyncedRef.current = {}
           remoteLoadedRef.current = true
           setSyncStatus('已連線雲端：未找到資料，已重建乾淨初始狀態')
           applyingRemoteRef.current = false
@@ -2230,6 +2296,13 @@ function App() {
         }
 
         applyingRemoteRef.current = true
+        const synced = lastSyncedRef.current
+        const local = latestStateRef.current
+        // A value differing from what we last synced was edited here and not written yet:
+        // keep it instead of letting another user's snapshot wipe out what is being typed.
+        const hasUnsavedEdits = (key: string, localValue: unknown) =>
+          synced[key] !== undefined && synced[key] !== JSON.stringify(localValue)
+
         const normalizedRemoteGroupData = normalizeGroupData(data.groupData)
         const remoteDishIds = new Set<number>(
           GROUP_TABS.flatMap((groupName) => normalizedRemoteGroupData[groupName].dishes.map((dish) => dish.id)),
@@ -2239,40 +2312,59 @@ function App() {
             pendingRemovedDishIdsRef.current.delete(dishId)
           }
         })
-        setGroupData((previous) =>
-          mergeRemoteWithLocalImages(
+
+        const keepLocalGroups = new Set<GroupTab>()
+        GROUP_TABS.forEach((groupName) => {
+          const key = groupSyncKey(groupName)
+          if (local && hasUnsavedEdits(key, stripGroupImagesForCloud(local.groupData[groupName]))) {
+            keepLocalGroups.add(groupName)
+            return
+          }
+          synced[key] = JSON.stringify(stripGroupImagesForCloud(normalizedRemoteGroupData[groupName]))
+        })
+
+        setGroupData((previous) => {
+          const merged = mergeRemoteWithLocalImages(
             normalizedRemoteGroupData,
             previous,
             pendingRemovedImageUrlsRef.current,
             pendingRemovedDishIdsRef.current,
-          ),
+          )
+          keepLocalGroups.forEach((groupName) => {
+            merged[groupName] = previous[groupName]
+          })
+          return merged
+        })
+
+        const asFlagRecord = (value: unknown): Record<string, boolean> =>
+          value && typeof value === 'object' ? (value as Record<string, boolean>) : {}
+
+        const applyShared = <K extends SharedField>(
+          field: K,
+          remoteValue: CloudState[K],
+          setter: (value: CloudState[K]) => void,
+        ) => {
+          if (local && hasUnsavedEdits(field, local[field])) {
+            return
+          }
+          synced[field] = JSON.stringify(remoteValue)
+          setter(remoteValue)
+        }
+
+        applyShared('ingredientAdjustments', data.ingredientAdjustments ?? {}, setIngredientAdjustments)
+        applyShared('toolAdjustments', data.toolAdjustments ?? {}, setToolAdjustments)
+        applyShared('toolLibrary', normalizeToolLibraryWithSeed(data.toolLibrary), setToolLibrary)
+        applyShared('ingredientLibrary', normalizeIngredientLibraryWithSeed(data.ingredientLibrary), setIngredientLibrary)
+        applyShared(
+          'preparedSummaryIngredients',
+          asFlagRecord(data.preparedSummaryIngredients),
+          setPreparedSummaryIngredients,
         )
-        setIngredientAdjustments(data.ingredientAdjustments ?? {})
-        setToolAdjustments(data.toolAdjustments ?? {})
-        setToolLibrary(normalizeToolLibraryWithSeed(data.toolLibrary))
-        setIngredientLibrary(normalizeIngredientLibraryWithSeed(data.ingredientLibrary))
-        setPreparedSummaryIngredients(
-          data.preparedSummaryIngredients && typeof data.preparedSummaryIngredients === 'object'
-            ? data.preparedSummaryIngredients
-            : {},
-        )
-        setPreparedSummaryTools(
-          data.preparedSummaryTools && typeof data.preparedSummaryTools === 'object'
-            ? data.preparedSummaryTools
-            : {},
-        )
-        setPreparedGroupIngredients(
-          data.preparedGroupIngredients && typeof data.preparedGroupIngredients === 'object'
-            ? data.preparedGroupIngredients
-            : {},
-        )
-        setPreparedGroupTools(
-          data.preparedGroupTools && typeof data.preparedGroupTools === 'object'
-            ? data.preparedGroupTools
-            : {},
-        )
+        applyShared('preparedSummaryTools', asFlagRecord(data.preparedSummaryTools), setPreparedSummaryTools)
+        applyShared('preparedGroupIngredients', asFlagRecord(data.preparedGroupIngredients), setPreparedGroupIngredients)
+        applyShared('preparedGroupTools', asFlagRecord(data.preparedGroupTools), setPreparedGroupTools)
         if (Array.isArray(data.shoppingStores)) {
-          setShoppingStores(data.shoppingStores)
+          applyShared('shoppingStores', data.shoppingStores, setShoppingStores)
         }
         remoteLoadedRef.current = true
         setSyncStatus('已連線雲端：即時同步中')
@@ -2281,6 +2373,7 @@ function App() {
       },
       () => {
         setSyncStatus('雲端同步失敗，已切換為本機模式')
+        setSaveState('error')
       },
     )
 
@@ -2292,9 +2385,26 @@ function App() {
       return
     }
 
-    const payload: PersistedState = {
-      currentTab,
-      groupData: stripImagesForCloud(groupData),
+    // Only send what changed (per group / per shared field), so two groups editing at the
+    // same time no longer overwrite each other's whole document.
+    const synced = lastSyncedRef.current
+    const payload: Record<string, unknown> = {}
+    const written: Record<string, string> = {}
+
+    const groupPatch: Partial<Record<GroupTab, GroupData>> = {}
+    GROUP_TABS.forEach((groupName) => {
+      const cloudGroup = stripGroupImagesForCloud(groupData[groupName])
+      const json = JSON.stringify(cloudGroup)
+      if (json !== synced[groupSyncKey(groupName)]) {
+        groupPatch[groupName] = cloudGroup
+        written[groupSyncKey(groupName)] = json
+      }
+    })
+    if (Object.keys(groupPatch).length > 0) {
+      payload.groupData = groupPatch
+    }
+
+    const shared: CloudShared = {
       ingredientAdjustments,
       toolAdjustments,
       toolLibrary,
@@ -2305,28 +2415,39 @@ function App() {
       preparedGroupTools,
       shoppingStores,
     }
+    SHARED_FIELDS.forEach((field) => {
+      const json = JSON.stringify(shared[field])
+      if (json !== synced[field]) {
+        payload[field] = shared[field]
+        written[field] = json
+      }
+    })
 
-    // currentTab is user-specific UI state, avoid syncing it across all users.
-    const { currentTab: _ignoredCurrentTab, ...cloudPayload } = payload
+    if (Object.keys(payload).length === 0) {
+      return
+    }
 
     const projectRef = doc(db, 'projects', firebaseProjectDocId)
     const timer = window.setTimeout(() => {
-      setDoc(projectRef, cloudPayload, { merge: true })
+      setSaveState('saving')
+      setDoc(projectRef, payload, { merge: true })
         .then(() => {
+          Object.assign(lastSyncedRef.current, written)
           if (firestoreWriteFailedRef.current) {
             setSyncStatus('雲端寫入已恢復，即時同步中')
           }
           firestoreWriteFailedRef.current = false
+          setSaveState('saved')
         })
         .catch(() => {
           firestoreWriteFailedRef.current = true
           setSyncStatus('雲端寫入失敗，已保留本機刪除結果並暫停套用雲端快照')
+          setSaveState('error')
         })
     }, 500)
 
     return () => window.clearTimeout(timer)
   }, [
-    currentTab,
     groupData,
     ingredientAdjustments,
     toolAdjustments,
@@ -2358,126 +2479,6 @@ function App() {
       }
     }
   }, [])
-
-  // --- Shopping List Functions ---
-  const addShoppingStore = () => {
-    setShoppingStores((prev) => [
-      ...prev,
-      { id: Date.now(), storeName: '新商店', items: [] },
-    ])
-  }
-
-  const removeShoppingStore = (storeId: number) => {
-    const confirmed = window.confirm('確定要刪除此商店嗎？商店內食材會一併刪除。')
-    if (!confirmed) {
-      return
-    }
-
-    setShoppingStores((prev) => prev.filter((s) => s.id !== storeId))
-  }
-
-  const updateShoppingStoreName = (storeId: number, newName: string) => {
-    setShoppingStores((prev) =>
-      prev.map((s) => (s.id === storeId ? { ...s, storeName: newName } : s)),
-    )
-  }
-
-  const addShoppingStoreItem = (storeId: number) => {
-    setShoppingStores((prev) =>
-      prev.map((s) => {
-        if (s.id !== storeId) return s
-        return {
-          ...s,
-          items: [...s.items, { id: Date.now(), ingredient: '', price: '', ownedQty: '' }],
-        }
-      }),
-    )
-  }
-
-  const addSelectedShoppingOverviewIngredientsToStore = () => {
-    if (shoppingOverviewTargetStoreId === null) {
-      return
-    }
-
-    const selectedIngredients = visibleShoppingIngredientOverviewRows
-      .filter((row) => shoppingOverviewSelectedIngredients[row.ingredient])
-      .map((row) => row.ingredient)
-
-    if (selectedIngredients.length === 0) {
-      return
-    }
-
-    setShoppingStores((prev) =>
-      prev.map((store) => {
-        if (store.id !== shoppingOverviewTargetStoreId) {
-          return store
-        }
-
-        const existingIngredients = new Set(store.items.map((item) => item.ingredient.trim()).filter(Boolean))
-        const nextItems = [...store.items]
-
-        selectedIngredients.forEach((ingredient) => {
-          if (existingIngredients.has(ingredient)) {
-            return
-          }
-
-          existingIngredients.add(ingredient)
-          nextItems.push({ id: Date.now() + nextItems.length, ingredient, price: '', ownedQty: '' })
-        })
-
-        return {
-          ...store,
-          items: nextItems,
-        }
-      }),
-    )
-
-    setShoppingOverviewSelectedIngredients({})
-    setShoppingOverviewShowAll(false)
-  }
-
-  const removeShoppingStoreItem = (storeId: number, itemId: number) => {
-    const confirmed = window.confirm('確定要移除此採買食材嗎？')
-    if (!confirmed) {
-      return
-    }
-
-    setShoppingStores((prev) =>
-      prev.map((s) => {
-        if (s.id !== storeId) return s
-        return { ...s, items: s.items.filter((item) => item.id !== itemId) }
-      }),
-    )
-  }
-
-  const updateShoppingStoreItem = (
-    storeId: number,
-    itemId: number,
-    field: keyof ShoppingStoreItem,
-    value: string | boolean,
-  ) => {
-    setShoppingStores((prev) =>
-      prev.map((s) => {
-        if (s.id !== storeId) return s
-        const updatedItems = s.items.map((item) =>
-          item.id === itemId ? { ...item, [field]: value } : item,
-        )
-        return { ...s, items: updatedItems }
-      }),
-    )
-  }
-
-  const allAssignedIngredients = useMemo(() => {
-    const assigned = new Set<string>()
-    shoppingStores.forEach((store) => {
-      store.items.forEach((item) => {
-        if (item.ingredient && summaryIngredientSet.has(item.ingredient)) {
-          assigned.add(item.ingredient)
-        }
-      })
-    })
-    return assigned
-  }, [shoppingStores, summaryIngredientSet])
 
   const exportGroupRecipesToWord = async (
     groupName: GroupTab,
@@ -2767,7 +2768,15 @@ function App() {
       <header className="page-header">
         <div>
           <h1>聖誕趴-廚藝競賽</h1>
-          <p className="hint">{syncStatus}</p>
+          <p className="save-status-row">
+            <span className={`save-pill save-pill-${saveState}`} title={syncStatus}>
+              {saveState === 'saving' && '儲存中…'}
+              {saveState === 'saved' && '✓ 已自動儲存'}
+              {saveState === 'error' && '⚠ 雲端儲存失敗'}
+              {saveState === 'local' && '僅存在這台裝置'}
+            </span>
+            <span className="hint save-status-detail">{syncStatus}</span>
+          </p>
         </div>
         <section className="admin-access">
           <p className="hint admin-title">管理員入口</p>
@@ -2849,70 +2858,122 @@ function App() {
 
       {imageUploadError && <p className="error">{imageUploadError}</p>}
 
-      <section className="tabs panel">
-        {visibleTabs.map((tabName) => {
-          const isAdminTab =
-            tabName === GROUP_INGREDIENT_LIBRARY_TAB ||
-            tabName === GROUP_TOOL_LIBRARY_TAB ||
-            tabName === '食材總表' ||
-            tabName === '工具總表' ||
-            tabName === SHOPPING_LIST_TAB ||
-            tabName === TOOL_LIBRARY_TAB ||
-            tabName === INGREDIENT_LIBRARY_TAB;
-
-          return (
-            <button
-              key={tabName}
-              className={`${currentTab === tabName ? 'tab-active' : ''} ${isAdminTab ? 'tab-admin' : ''}`.trim()}
-              onClick={() => setCurrentTab(tabName)}
-            >
-              {tabName}
-            </button>
-          )
-        })}
-      </section>
+      <nav className="tabs panel" aria-label="分頁">
+        <div className="tab-row">
+          <span className="tab-row-label">組別</span>
+          {visibleTabs
+            .filter((tabName) => GROUP_TABS.includes(tabName as GroupTab) || tabName === CHANGELOG_TAB)
+            .map((tabName) => (
+              <button
+                key={tabName}
+                className={currentTab === tabName ? 'tab-active' : ''}
+                aria-current={currentTab === tabName ? 'page' : undefined}
+                onClick={() => setCurrentTab(tabName)}
+              >
+                {tabName}
+              </button>
+            ))}
+        </div>
+        {adminUnlocked && (
+          <div className="tab-row">
+            <span className="tab-row-label">行政組</span>
+            {visibleTabs
+              .filter((tabName) => !GROUP_TABS.includes(tabName as GroupTab) && tabName !== CHANGELOG_TAB)
+              .map((tabName) => (
+                <button
+                  key={tabName}
+                  className={`tab-admin ${currentTab === tabName ? 'tab-active' : ''}`.trim()}
+                  aria-current={currentTab === tabName ? 'page' : undefined}
+                  onClick={() => setCurrentTab(tabName)}
+                >
+                  {tabName === SHOPPING_LIST_TAB ? '🛒 ' : ''}
+                  {tabName}
+                </button>
+              ))}
+          </div>
+        )}
+      </nav>
 
       <datalist id="ingredient-library-options">
-        {ingredientLibrary.map((name) => (
+        {ingredientSuggestions.map((name) => (
           <option key={name} value={name} />
         ))}
       </datalist>
 
       <datalist id="tool-library-options">
-        {toolLibrary.map((name) => (
+        {toolSuggestions.map((name) => (
           <option key={name} value={name} />
         ))}
       </datalist>
 
       {GROUP_TABS.includes(currentTab as GroupTab) && (
         <>
-          <p className="hint">{activeGroup}：有填食材時，總量必填；有填工具時，數量必填。</p>
           {isActiveGroupSample && !adminUnlocked && (
-            <p className="hint">範例組目前為唯讀，請使用管理員帳號解鎖後編輯。</p>
+            <p className="notice-banner">👀 這是範例組，給大家參考怎麼填。請切換到自己的組別開始填寫。</p>
           )}
-          <section className="panel">
+          {!isActiveGroupSample && (() => {
+            const pendingItems = activeGroupChecklist.filter((item) => !item.done)
+            const doneCount = activeGroupChecklist.length - pendingItems.length
+            const percent = Math.round((doneCount / Math.max(activeGroupChecklist.length, 1)) * 100)
+
+            return (
+              <section className={`progress-card ${pendingItems.length === 0 ? 'is-complete' : ''}`}>
+                <div className="progress-card-head">
+                  <strong>
+                    {pendingItems.length === 0
+                      ? '🎉 都填好了！行政組會依照這份清單去採買'
+                      : `${activeGroup} 填寫進度 ${doneCount}/${activeGroupChecklist.length}`}
+                  </strong>
+                  <span className="hint progress-card-hint">輸入後會自動儲存，不需要按送出</span>
+                </div>
+                <div className="progress-track" aria-hidden="true">
+                  <div className="progress-fill" style={{ width: `${percent}%` }} />
+                </div>
+                {pendingItems.length > 0 && (
+                  <div className="progress-todo">
+                    <span className="progress-todo-label">還差：</span>
+                    {pendingItems.map((item) => (
+                      <button
+                        key={item.label}
+                        type="button"
+                        className="todo-chip"
+                        onClick={() =>
+                          document.getElementById(item.targetId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                        }
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )
+          })()}
+          <section className="panel" id="group-meta">
             <h2>{activeGroup}</h2>
             <fieldset className="group-edit-fieldset" disabled={!canEditActiveGroup}>
               <div className="meta-grid">
               <label>
-                廚神（自行填寫名字）
+                <span className="field-label">
+                  廚神 <span className="required-badge">必填</span>
+                </span>
                 <input
                   value={groupData[activeGroup].teamName}
                   onChange={(event) => updateGroupMeta(activeGroup, 'teamName', event.target.value)}
-                  placeholder="例如：廚神隊 / 成員名稱"
-                  className={!groupData[activeGroup].teamName.trim() ? 'input-error' : ''}
+                  placeholder="你們的隊名或成員名字"
+                  className={!groupData[activeGroup].teamName.trim() ? 'input-required' : ''}
                 />
-                {!groupData[activeGroup].teamName.trim() && <p className="field-error">此欄位為必填</p>}
               </label>
               <label>
-                料理種類（自行填入）
+                <span className="field-label">
+                  料理種類 <span className="required-badge">必填</span>
+                </span>
                 <input
                   value={groupData[activeGroup].cuisineType}
                   onChange={(event) => updateGroupMeta(activeGroup, 'cuisineType', event.target.value)}
-                  placeholder="例如：韓式 / 義式 / 台式"
-                  className={!groupData[activeGroup].cuisineType.trim() ? 'input-error' : ''}
+                  placeholder="例如：韓式、義式、台式"
+                  className={!groupData[activeGroup].cuisineType.trim() ? 'input-required' : ''}
                 />
-                {!groupData[activeGroup].cuisineType.trim() && <p className="field-error">此欄位為必填</p>}
               </label>
               </div>
             </fieldset>
@@ -3010,9 +3071,9 @@ function App() {
             )
 
             return (
-              <section key={`input-${dish.id}`} className="panel">
+              <section key={`input-${dish.id}`} className="panel" id={`dish-${dish.id}`}>
                 <div className="section-header">
-                  <h2>{`料理${dishIndex + 1}`}</h2>
+                  <h2>{dish.title.trim() ? `料理${dishIndex + 1}｜${dish.title.trim()}` : `料理${dishIndex + 1}`}</h2>
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                     {dishIndex >= MIN_DISH_COUNT && canEditActiveGroup && (
                       <button
@@ -3045,14 +3106,15 @@ function App() {
                     <fieldset className="group-edit-fieldset" disabled={!canEditActiveGroup}>
                     <article className="dish-card">
                   <label>
-                    料理名稱
+                    <span className="field-label">
+                      料理名稱 <span className="required-badge">必填</span>
+                    </span>
                     <input
                       value={dish.title}
                       onChange={(event) => updateDish(activeGroup, dish.id, 'title', event.target.value)}
-                      placeholder="請輸入料理名稱"
-                      className={!dish.title.trim() ? 'input-error' : ''}
+                      placeholder="例如：韓式泡菜煎餅"
+                      className={!dish.title.trim() ? 'input-required' : ''}
                     />
-                    {!dish.title.trim() && <p className="field-error">料理名稱必填</p>}
                   </label>
                   <label>
                     製作影片或食譜網址
@@ -3200,94 +3262,28 @@ function App() {
                   </div>
                     </article>
 
-                    <div className="table-wrap section-gap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th>食材</th>
-                            <th>一份數量</th>
-                            <th>單位</th>
-                            <th>總量*</th>
-                            <th>總量單位</th>
-                            <th>備註</th>
-                            <th>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {dishIngredientRows.map((row) => (
-                            <tr key={row.id} className={invalidIngredientRowIds.has(row.id) ? 'row-invalid' : ''}>
-                              <td data-label="食材">
-                                <input
-                                  value={row.ingredient}
-                                  onChange={(event) =>
-                                    updateIngredientRow(activeGroup, row.id, 'ingredient', event.target.value)
-                                  }
-                                  placeholder="例如：辣椒粉"
-                                  list="ingredient-library-options"
-                                />
-                              </td>
-                              <td data-label="一份數量">
-                                <input
-                                  value={row.perServingQty}
-                                  onChange={(event) =>
-                                    updateIngredientRow(activeGroup, row.id, 'perServingQty', event.target.value)
-                                  }
-                                  placeholder="例如：10"
-                                />
-                              </td>
-                              <td data-label="單位">
-                                <input
-                                  value={row.perServingUnit}
-                                  onChange={(event) =>
-                                    updateIngredientRow(activeGroup, row.id, 'perServingUnit', event.target.value)
-                                  }
-                                  placeholder="例如：g"
-                                />
-                              </td>
-                              <td data-label="總量*">
-                                <input
-                                  value={row.totalQty}
-                                  onChange={(event) =>
-                                    updateIngredientRow(activeGroup, row.id, 'totalQty', event.target.value)
-                                  }
-                                  placeholder="必填（有食材時）"
-                                  className={invalidIngredientRowIds.has(row.id) ? 'input-error' : ''}
-                                />
-                                {invalidIngredientRowIds.has(row.id) && <p className="field-error">缺少總量</p>}
-                              </td>
-                              <td data-label="總量單位">
-                                <input
-                                  value={row.totalUnit}
-                                  onChange={(event) =>
-                                    updateIngredientRow(activeGroup, row.id, 'totalUnit', event.target.value)
-                                  }
-                                  placeholder="例如：包"
-                                />
-                              </td>
-                              <td data-label="備註">
-                                <input
-                                  value={row.note}
-                                  onChange={(event) =>
-                                    updateIngredientRow(activeGroup, row.id, 'note', event.target.value)
-                                  }
-                                  placeholder="例如：共用材料"
-                                />
-                              </td>
-                              <td data-label="操作">
-                                <button
-                                  className="btn-danger"
-                                  onClick={() => removeIngredientRow(activeGroup, row.id, dish.id)}
-                                >
-                                  刪除
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div className="actions">
-                      <button onClick={() => addIngredientRow(activeGroup, dish.id)}>新增食材列</button>
+                    <div className="dish-ingredients section-gap">
+                      <h3 className="subsection-title">
+                        食材 <span className="count-badge">{dishIngredientRows.length}</span>
+                      </h3>
+                      <ItemQuickList
+                        kind="ingredient"
+                        items={dishIngredientRows.map((row) => ({
+                          id: row.id,
+                          name: row.ingredient,
+                          qty: row.totalQty,
+                          unit: row.totalUnit,
+                          note: row.note,
+                        }))}
+                        library={ingredientSuggestions}
+                        unitChips={INGREDIENT_UNIT_CHIPS}
+                        suggestUnit={suggestIngredientUnit}
+                        readOnly={!canEditActiveGroup}
+                        onCreate={(drafts) => createIngredientRows(activeGroup, dish.id, drafts)}
+                        onChange={(id, patch) => patchIngredientRow(activeGroup, id, patch)}
+                        onRemove={(id) => removeRowWithUndo(activeGroup, 'ingredientRows', id)}
+                        onNotice={(message) => showToast(message)}
+                      />
                     </div>
                     </fieldset>
                   </div>
@@ -3302,9 +3298,9 @@ function App() {
             </button>
           </div>
 
-          <section className="panel">
+          <section className="panel" id="group-tools">
             <div className="section-header">
-              <h2>工具欄位（不分料理）</h2>
+              <h2>需要的工具（整組共用）</h2>
               <button
                 type="button"
                 className="btn-collapse"
@@ -3326,75 +3322,28 @@ function App() {
             <div className={`collapse-content ${groupCollapseState[activeGroup].toolsCollapsed ? 'is-collapsed' : ''}`}>
               <div className="collapse-inner">
                 <fieldset className="group-edit-fieldset" disabled={!canEditActiveGroup}>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>工具</th>
-                        <th>數量*</th>
-                        <th>單位</th>
-                        <th>備註</th>
-                        <th>操作</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activeToolRows.map((row) => (
-                        <tr key={row.id} className={invalidToolRowIds.has(row.id) ? 'row-invalid' : ''}>
-                          <td data-label="工具">
-                            <input
-                              value={row.tool}
-                              onChange={(event) => updateToolRow(activeGroup, row.id, 'tool', event.target.value)}
-                              placeholder="例如：炒鍋"
-                              list="tool-library-options"
-                            />
-                          </td>
-                          <td data-label="數量*">
-                            <input
-                              value={row.qty}
-                              onChange={(event) => updateToolRow(activeGroup, row.id, 'qty', event.target.value)}
-                              placeholder="有填工具時必填"
-                              className={invalidToolRowIds.has(row.id) ? 'input-error' : ''}
-                            />
-                            {invalidToolRowIds.has(row.id) && <p className="field-error">缺少數量</p>}
-                          </td>
-                          <td data-label="單位">
-                            <input
-                              value={row.unit}
-                              onChange={(event) => updateToolRow(activeGroup, row.id, 'unit', event.target.value)}
-                              placeholder="例如：個"
-                            />
-                          </td>
-                          <td data-label="備註">
-                            <input
-                              value={row.note}
-                              onChange={(event) => updateToolRow(activeGroup, row.id, 'note', event.target.value)}
-                              placeholder="例如：共用"
-                            />
-                          </td>
-                          <td data-label="操作">
-                            <button className="btn-danger" onClick={() => removeToolRow(activeGroup, row.id)}>
-                              刪除
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="actions">
-                  <button onClick={() => addToolRow(activeGroup)}>新增工具列</button>
-                </div>
+                  <ItemQuickList
+                    kind="tool"
+                    items={activeToolRows.map((row) => ({
+                      id: row.id,
+                      name: row.tool,
+                      qty: row.qty,
+                      unit: row.unit,
+                      note: row.note,
+                    }))}
+                    library={toolSuggestions}
+                    unitChips={TOOL_UNIT_CHIPS}
+                    suggestUnit={suggestToolUnit}
+                    readOnly={!canEditActiveGroup}
+                    onCreate={(drafts) => createToolRows(activeGroup, drafts)}
+                    onChange={(id, patch) => patchToolRow(activeGroup, id, patch)}
+                    onRemove={(id) => removeRowWithUndo(activeGroup, 'toolRows', id)}
+                    onNotice={(message) => showToast(message)}
+                  />
                 </fieldset>
               </div>
             </div>
           </section>
-
-          {invalidIngredientRowIds.size > 0 && (
-            <p className="error">目前有 {invalidIngredientRowIds.size} 列未填總量，未被納入食材總表。</p>
-          )}
-          {invalidToolRowIds.size > 0 && (
-            <p className="error">目前有 {invalidToolRowIds.size} 列未填工具數量，未被納入工具總表。</p>
-          )}
         </>
       )}
 
@@ -3402,33 +3351,38 @@ function App() {
         <>
           <section className="panel">
             <h2>食材總表</h2>
+            <p className="hint">
+              同名食材會自動合併，kg／台斤會換算成 g、公升會換算成 ml。調整量請用右邊的單位填寫（可填負數）。
+            </p>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>備料</th>
                     <th>食材</th>
-                    <th>一份數量總和</th>
-                    <th>單位</th>
-                    <th>總量總和</th>
+                    <th>各組需求</th>
+                    <th>合計</th>
                     <th>調整量</th>
                     <th>最終總量</th>
-                    <th>總量單位</th>
+                    <th>單位</th>
                     <th>備註</th>
                   </tr>
                 </thead>
                 <tbody>
                   {ingredientSummaryRows.length === 0 && (
                     <tr>
-                      <td colSpan={9} className="empty">
+                      <td colSpan={8} className="empty">
                         尚無可彙總資料
                       </td>
                     </tr>
                   )}
                   {ingredientSummaryRows.map((row) => {
-                    const key = `${row.ingredient}-${row.perServingUnit}-${row.totalUnit}-${row.note}`
+                    const key = row.key
                     const adjustment = toNumber(ingredientAdjustments[key] ?? '')
-                    const finalTotal = row.sumTotalQty + adjustment
+                    const finalTotal = row.sumQty + adjustment
+                    const extras = [row.hasVague ? VAGUE_QTY : '', row.missingQtyCount > 0 ? `${row.missingQtyCount} 項未填數量` : '']
+                      .filter(Boolean)
+                      .join('、')
 
                     return (
                       <tr key={key}>
@@ -3447,9 +3401,11 @@ function App() {
                           />
                         </td>
                         <td data-label="食材">{row.ingredient}</td>
-                        <td data-label="一份數量總和">{formatNumber(row.sumPerServingQty)}</td>
-                        <td data-label="單位">{row.perServingUnit}</td>
-                        <td data-label="總量總和">{formatNumber(row.sumTotalQty)}</td>
+                        <td data-label="各組需求" className="summary-sources">{row.sources.join('、')}</td>
+                        <td data-label="合計">
+                          {formatNumber(row.sumQty)}
+                          {extras && <span className="summary-extra">（另有{extras}）</span>}
+                        </td>
                         <td data-label="調整量">
                           <input
                             value={ingredientAdjustments[key] ?? ''}
@@ -3460,11 +3416,12 @@ function App() {
                               }))
                             }
                             placeholder="0"
+                            inputMode="decimal"
                           />
                         </td>
                         <td data-label="最終總量">{formatNumber(finalTotal)}</td>
-                        <td data-label="總量單位">{row.totalUnit}</td>
-                        <td data-label="備註">{row.note}</td>
+                        <td data-label="單位">{row.unit || '-'}</td>
+                        <td data-label="備註">{row.note || '-'}</td>
                       </tr>
                     )
                   })}
@@ -3485,6 +3442,7 @@ function App() {
                   <tr>
                     <th>備妥</th>
                     <th>工具</th>
+                    <th>各組需求</th>
                     <th>需求數量</th>
                     <th>調整量</th>
                     <th>最終數量</th>
@@ -3495,13 +3453,13 @@ function App() {
                 <tbody>
                   {toolSummaryRows.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="empty">
+                      <td colSpan={8} className="empty">
                         尚無可彙總資料
                       </td>
                     </tr>
                   )}
                   {toolSummaryRows.map((row) => {
-                    const key = `${row.tool}-${row.unit}-${row.note}`
+                    const key = row.key
                     const adjustment = toNumber(toolAdjustments[key] ?? '')
                     const finalTotal = row.sumQty + adjustment
 
@@ -3522,6 +3480,7 @@ function App() {
                           />
                         </td>
                         <td data-label="工具">{row.tool}</td>
+                        <td data-label="各組需求" className="summary-sources">{row.sources.join('、')}</td>
                         <td data-label="需求數量">{formatNumber(row.sumQty)}</td>
                         <td data-label="調整量">
                           <input
@@ -3674,17 +3633,15 @@ function App() {
                         <th>備料</th>
                         <th>料理</th>
                         <th>食材</th>
-                        <th>一份數量</th>
-                        <th>一份單位</th>
-                        <th>總量</th>
-                        <th>總量單位</th>
+                        <th>數量</th>
+                        <th>單位</th>
                         <th>備註</th>
                       </tr>
                     </thead>
                     <tbody>
                       {rows.length === 0 && (
                         <tr>
-                          <td colSpan={8} className="empty">
+                          <td colSpan={6} className="empty">
                             此組目前尚未填寫食材
                           </td>
                         </tr>
@@ -3710,10 +3667,8 @@ function App() {
                             </td>
                             <td data-label="料理">{row.dishName}</td>
                             <td data-label="食材">{row.ingredient}</td>
-                            <td data-label="一份數量">{row.perServingQty || '-'}</td>
-                            <td data-label="一份單位">{row.perServingUnit || '-'}</td>
-                            <td data-label="總量">{row.totalQty || '-'}</td>
-                            <td data-label="總量單位">{row.totalUnit || '-'}</td>
+                            <td data-label="數量">{row.totalQty || '-'}</td>
+                            <td data-label="單位">{row.totalUnit || '-'}</td>
                             <td data-label="備註">{row.note || '-'}</td>
                           </tr>
                         )
@@ -3811,361 +3766,13 @@ function App() {
       )}
 
       {currentTab === SHOPPING_LIST_TAB && adminUnlocked && (
-        <section className="panel">
-          <div
-            className="section-header"
-            style={{ marginBottom: '1rem', display: 'flex', gap: '1rem', alignItems: 'center' }}
-          >
-            <h2 style={{ margin: 0 }}>食材採買（管理員）</h2>
-            <button className="btn-primary" onClick={addShoppingStore}>
-              ＋ 新增商店
-            </button>
-          </div>
-
-          <p className="hint">
-            這裡直接顯示每個食材的需求總量與單位，選完食材後可直接填「家中已有」，系統會自動算出還要買多少。
-            已選過的食材會反灰，避免同一項食材被重複分派到不同商店。
-          </p>
-
-          <section className="shopping-overview panel section-gap">
-            <div className="section-header shopping-overview-header">
-              <div>
-                <h3 className="shopping-overview-title">採買摘要</h3>
-                <p className="hint shopping-overview-hint">
-                  共 {shoppingIngredientOverviewRows.length} 項，未分配 {unassignedShoppingIngredientCount} 項。
-                </p>
-              </div>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setShoppingOverviewExpanded((previous) => !previous)}
-              >
-                {shoppingOverviewExpanded ? '收合摘要' : '展開摘要'}
-              </button>
-            </div>
-
-            {shoppingOverviewExpanded && (
-              <>
-                <div className="shopping-overview-toolbar">
-                  <div className="shopping-overview-filters">
-                    <button
-                      type="button"
-                      className={shoppingOverviewFilter === 'unassigned' ? 'word-export-mode-active' : 'btn-secondary'}
-                      onClick={() => {
-                        setShoppingOverviewFilter('unassigned')
-                        setShoppingOverviewShowAll(false)
-                      }}
-                    >
-                      只看未分配
-                    </button>
-                    <button
-                      type="button"
-                      className={shoppingOverviewFilter === 'all' ? 'word-export-mode-active' : 'btn-secondary'}
-                      onClick={() => {
-                        setShoppingOverviewFilter('all')
-                        setShoppingOverviewShowAll(true)
-                      }}
-                    >
-                      顯示全部
-                    </button>
-                  </div>
-                  <input
-                    className="shopping-overview-search"
-                    value={shoppingOverviewQuery}
-                    onChange={(event) => setShoppingOverviewQuery(event.target.value)}
-                    placeholder="搜尋食材 / 備註 / 商店"
-                  />
-                </div>
-
-                {shoppingOverviewFilter === 'unassigned' ? (
-                  <>
-                    <div className="shopping-overview-bulk-bar">
-                      <div className="shopping-overview-bulk-actions">
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() =>
-                            setShoppingOverviewSelectedIngredients((previous) => ({
-                              ...previous,
-                              ...Object.fromEntries(
-                                visibleShoppingIngredientOverviewRows.map((row) => [row.ingredient, true]),
-                              ),
-                            }))
-                          }
-                          disabled={visibleShoppingIngredientOverviewRows.length === 0}
-                        >
-                          全選目前顯示
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => setShoppingOverviewSelectedIngredients({})}
-                          disabled={selectedShoppingOverviewCount === 0}
-                        >
-                          清除勾選
-                        </button>
-                      </div>
-                      <div className="shopping-overview-bulk-actions">
-                        <select
-                          value={shoppingOverviewTargetStoreId ?? ''}
-                          onChange={(event) => setShoppingOverviewTargetStoreId(Number(event.target.value) || null)}
-                          disabled={shoppingStores.length === 0}
-                        >
-                          {shoppingStores.length === 0 ? (
-                            <option value="">請先新增商店</option>
-                          ) : (
-                            shoppingStores.map((store) => (
-                              <option key={store.id} value={store.id}>
-                                {store.storeName || '未命名商店'}
-                              </option>
-                            ))
-                          )}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={addSelectedShoppingOverviewIngredientsToStore}
-                          disabled={selectedShoppingOverviewCount === 0 || shoppingOverviewTargetStoreId === null}
-                        >
-                          將已勾選食材送進商店清單
-                        </button>
-                      </div>
-                    </div>
-
-                    {visibleShoppingIngredientOverviewRows.length === 0 ? (
-                      <p className="empty">目前沒有符合條件的未分配食材。</p>
-                    ) : (
-                      <div className="shopping-overview-card-grid">
-                        {visibleShoppingIngredientOverviewRows.map((row) => (
-                          <label key={`${row.ingredient}-${row.totalUnit}`} className="shopping-overview-card">
-                            <div className="shopping-overview-card-top">
-                              <input
-                                type="checkbox"
-                                className="prep-checkbox"
-                                checked={Boolean(shoppingOverviewSelectedIngredients[row.ingredient])}
-                                onChange={(event) =>
-                                  setShoppingOverviewSelectedIngredients((previous) => ({
-                                    ...previous,
-                                    [row.ingredient]: event.target.checked,
-                                  }))
-                                }
-                              />
-                              <div>
-                                <strong>{row.ingredient}</strong>
-                                <p className="shopping-overview-card-qty">需求量：{row.requiredDisplay}</p>
-                              </div>
-                            </div>
-                            <p className="shopping-overview-card-meta">備註：{row.note || '無'}</p>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-
-                    {canToggleShoppingOverviewShowAll && (
-                      <div className="actions">
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={() => setShoppingOverviewShowAll((previous) => !previous)}
-                        >
-                          {shoppingOverviewShowAll
-                            ? '只看前 5 項'
-                            : `再顯示 ${hiddenShoppingIngredientCount} 項未分配食材`}
-                        </button>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <div className="table-wrap shopping-overview-table-wrap">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>食材</th>
-                          <th>需求總量</th>
-                          <th>備註</th>
-                          <th>已分配商店</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredShoppingIngredientOverviewRows.length === 0 && (
-                          <tr>
-                            <td colSpan={4} className="empty">
-                              目前沒有符合條件的食材摘要
-                            </td>
-                          </tr>
-                        )}
-                        {filteredShoppingIngredientOverviewRows.map((row) => (
-                          <tr key={`${row.ingredient}-${row.totalUnit}`}>
-                            <td data-label="食材">{row.ingredient}</td>
-                            <td data-label="需求總量">{row.requiredDisplay}</td>
-                            <td data-label="備註">{row.note || '-'}</td>
-                            <td data-label="已分配商店">{row.assignedStoreName ?? '尚未分配'}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
-            )}
-          </section>
-
-          {shoppingStores.length === 0 ? (
-            <p className="empty">目前沒有商店，請點擊上方按鈕新增商店。</p>
-          ) : (
-            <div className="shopping-stores-list" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
-              {shoppingStores.map((store) => {
-                const storeTotal = store.items.reduce((sum, item) => {
-                  if (!summaryIngredientSet.has(item.ingredient)) {
-                    return sum
-                  }
-                  return sum + toNumber(item.price)
-                }, 0)
-
-                return (
-                  <article key={store.id} className="panel">
-                    <div
-                      className="section-header"
-                      style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}
-                    >
-                      <input
-                        type="text"
-                        value={store.storeName}
-                        onChange={(e) => updateShoppingStoreName(store.id, e.target.value)}
-                        placeholder="請輸入商店名稱"
-                        style={{ fontSize: '1.25rem', fontWeight: 'bold', padding: '0.5rem', flex: 1 }}
-                      />
-                      <button className="btn-danger" onClick={() => removeShoppingStore(store.id)}>
-                        刪除商店
-                      </button>
-                    </div>
-
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            <th style={{ width: '60px' }}>已購</th>
-                            <th>食材</th>
-                            <th>需求量</th>
-                            <th>家中已有</th>
-                            <th>還要買</th>
-                            <th>單位</th>
-                            <th>採買金額</th>
-                            <th style={{ width: '80px' }}>操作</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {store.items.length === 0 && (
-                            <tr>
-                              <td colSpan={8} className="empty">
-                                尚未加入食材
-                              </td>
-                            </tr>
-                          )}
-                          {store.items.map((item) => {
-                            const selectedRequirement = shoppingIngredientOverviewRows.find(
-                              (row) => row.ingredient === item.ingredient,
-                            )
-                            const ownedQty = toNumber(item.ownedQty ?? '')
-                            const remainingQty = Math.max((selectedRequirement?.requiredTotal ?? 0) - ownedQty, 0)
-
-                            return (
-                              <tr key={item.id} style={item.purchased ? { opacity: 0.6 } : {}}>
-                                <td data-label="已購">
-                                  <input
-                                    type="checkbox"
-                                    className="prep-checkbox"
-                                    checked={Boolean(item.purchased)}
-                                    onChange={(e) =>
-                                      updateShoppingStoreItem(store.id, item.id, 'purchased', e.target.checked)
-                                    }
-                                    aria-label={`標記 ${item.ingredient || '食材'} 是否已購`}
-                                  />
-                                </td>
-                                <td data-label="食材">
-                                  <select
-                                    value={item.ingredient}
-                                    onChange={(e) => {
-                                      updateShoppingStoreItem(store.id, item.id, 'ingredient', e.target.value)
-                                      updateShoppingStoreItem(store.id, item.id, 'ownedQty', '')
-                                    }}
-                                  >
-                                    <option value="">-- 選擇食材 --</option>
-                                    {uniqueSummaryIngredients.map((name) => {
-                                      const isAssigned = allAssignedIngredients.has(name) && item.ingredient !== name
-                                      return (
-                                        <option
-                                          key={name}
-                                          value={name}
-                                          disabled={isAssigned}
-                                          style={isAssigned ? { color: '#999' } : {}}
-                                        >
-                                          {name} {isAssigned ? '(已排定)' : ''}
-                                        </option>
-                                      )
-                                    })}
-                                  </select>
-                                </td>
-                                <td data-label="需求量">{selectedRequirement?.requiredDisplay ?? '-'}</td>
-                                <td data-label="家中已有">
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    inputMode="decimal"
-                                    value={item.ownedQty ?? ''}
-                                    onChange={(e) => updateShoppingStoreItem(store.id, item.id, 'ownedQty', e.target.value)}
-                                    placeholder="0"
-                                    disabled={!selectedRequirement}
-                                  />
-                                </td>
-                                <td data-label="還要買">{selectedRequirement ? formatNumber(remainingQty) : '-'}</td>
-                                <td data-label="單位">{selectedRequirement?.totalUnit || '-'}</td>
-                                <td data-label="採買金額">
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    inputMode="numeric"
-                                    value={item.price}
-                                    onChange={(e) => updateShoppingStoreItem(store.id, item.id, 'price', e.target.value)}
-                                    placeholder="0"
-                                  />
-                                </td>
-                                <td data-label="操作">
-                                  <button
-                                    className="btn-danger"
-                                    onClick={() => removeShoppingStoreItem(store.id, item.id)}
-                                  >
-                                    移除
-                                  </button>
-                                </td>
-                              </tr>
-                            )
-                          })}
-                          <tr>
-                            <td colSpan={8}>
-                              <button className="btn-secondary" onClick={() => addShoppingStoreItem(store.id)}>
-                                ＋ 新增食材
-                              </button>
-                            </td>
-                          </tr>
-                        </tbody>
-                        <tfoot>
-                          <tr>
-                            <td data-label="總計" colSpan={6} style={{ textAlign: 'right', fontWeight: 'bold' }}>
-                              此商店結帳總額
-                            </td>
-                            <td data-label="採買金額" colSpan={2} style={{ fontWeight: 'bold', color: '#b91c1c' }}>
-                              {formatNumber(storeTotal)}
-                            </td>
-                          </tr>
-                        </tfoot>
-                      </table>
-                    </div>
-                  </article>
-                )
-              })}
-            </div>
-          )}
-        </section>
+        <ShoppingBoard
+          needs={shoppingNeeds}
+          stores={shoppingStores}
+          setStores={setShoppingStores}
+          onNotice={showToast}
+          createId={createId}
+        />
       )}
 
       {currentTab === CHANGELOG_TAB && (
@@ -4185,6 +3792,27 @@ function App() {
             ))}
           </div>
         </section>
+      )}
+
+      {toast && (
+        <div className="toast" role="status" aria-live="polite" key={toast.id}>
+          <span>{toast.message}</span>
+          {toast.undo && (
+            <button
+              type="button"
+              className="toast-action"
+              onClick={() => {
+                toast.undo?.()
+                setToast(null)
+              }}
+            >
+              復原
+            </button>
+          )}
+          <button type="button" className="toast-close" onClick={() => setToast(null)} aria-label="關閉通知">
+            ✕
+          </button>
+        </div>
       )}
     </main>
   )
