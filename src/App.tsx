@@ -44,6 +44,17 @@ import {
   type Suggestion,
 } from './shopping'
 import { PRICE_REFERENCE_SEED, PRICE_REFERENCE_UPDATED } from './price-reference'
+import {
+  BUILTIN_INGREDIENT_ALIASES,
+  BUILTIN_TOOL_ALIASES,
+  canonicalName,
+  canonicalUnit,
+  cleanDisplayName,
+  formatQuantity,
+  normalizeNameText,
+  pairKey,
+  suggestDuplicateNames,
+} from './name-normalize'
 
 // Group ids are stable keys in groupData. Legacy groups use their original name as id.
 const SAMPLE_GROUP_TAB = '範例組' as const
@@ -137,16 +148,28 @@ type ToolRow = {
 }
 
 type IngredientSummaryRow = {
+  // Adjustments and checkmarks are stored under this key: canonical name + canonical unit.
+  key: string
+  nameKey: string
   ingredient: string
+  // Other spellings that were counted as this ingredient (蕃茄 for 番茄).
+  variants: string[]
   perServingUnit: string
+  perServingMixed: boolean
   totalUnit: string
   note: string
   sumPerServingQty: number
   sumTotalQty: number
+  // Amounts that are not numbers, such as 適量.
+  vagueAmounts: string[]
+  // The same ingredient also appears with a unit that cannot be converted (顆 and g).
+  unitConflict: boolean
 }
 
 type ToolSummaryRow = {
+  key: string
   tool: string
+  variants: string[]
   unit: string
   note: string
   sumQty: number
@@ -212,6 +235,11 @@ type SharedState = {
   preparedGroupTools: Record<string, boolean>
   shoppingStores: ShoppingStore[]
   priceBook: PriceEntry[]
+  // Admin-defined spellings to merge in summaries: normalized variant -> canonical name.
+  ingredientAliases: Record<string, string>
+  toolAliases: Record<string, string>
+  // Suggested merges an admin said are different things.
+  dismissedNamePairs: string[]
 }
 
 // `data` is what this client shows; `base` is the last cloud state it saw (null = never synced).
@@ -804,6 +832,11 @@ const normalizeSharedState = (input: unknown): SharedState => {
     preparedGroupTools: toBooleanRecord(raw.preparedGroupTools),
     shoppingStores: normalizeShoppingStores(raw.shoppingStores),
     priceBook: normalizePriceBook(raw.priceBook),
+    ingredientAliases: toStringRecord(raw.ingredientAliases),
+    toolAliases: toStringRecord(raw.toolAliases),
+    dismissedNamePairs: Array.isArray(raw.dismissedNamePairs)
+      ? raw.dismissedNamePairs.filter((value): value is string => typeof value === 'string')
+      : [],
   }
 }
 
@@ -1228,6 +1261,9 @@ function App() {
     preparedGroupTools,
     shoppingStores,
     priceBook,
+    ingredientAliases,
+    toolAliases,
+    dismissedNamePairs,
   } = syncState.data
 
   // Per-field setters over the single shared state, so call sites read like plain useState setters.
@@ -1253,6 +1289,9 @@ function App() {
   const setPreparedGroupTools = sharedFieldSetter('preparedGroupTools')
   const setShoppingStores = sharedFieldSetter('shoppingStores')
   const setPriceBook = sharedFieldSetter('priceBook')
+  const setIngredientAliases = sharedFieldSetter('ingredientAliases')
+  const setToolAliases = sharedFieldSetter('toolAliases')
+  const setDismissedNamePairs = sharedFieldSetter('dismissedNamePairs')
 
   const [groupCollapseState, setGroupCollapseState] = useState<Record<GroupTab, GroupCollapseState>>({})
   const [adminUnlocked, setAdminUnlocked] = useState(false)
@@ -1291,6 +1330,7 @@ function App() {
   const [shoppingModeStoreId, setShoppingModeStoreId] = useState<number | null>(null)
   const [shoppingModeHideDone, setShoppingModeHideDone] = useState(false)
   const [priceQuery, setPriceQuery] = useState('')
+  const [aliasDraft, setAliasDraft] = useState({ from: '', to: '' })
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncRetryTick, setSyncRetryTick] = useState(0)
   const [syncStatus, setSyncStatus] = useState(
@@ -1391,75 +1431,159 @@ function App() {
     [groupData, nonSampleGroupIds],
   )
 
+  const canonicalIngredient = (name: string) => canonicalName(name, ingredientAliases, BUILTIN_INGREDIENT_ALIASES)
+  const canonicalTool = (name: string) => canonicalName(name, toolAliases, BUILTIN_TOOL_ALIASES)
+
+  // Totals per ingredient after unifying spellings (蕃茄 = 番茄) and units (克 = g, 1 公斤 = 1000 g).
   const ingredientSummaryRows = useMemo<IngredientSummaryRow[]>(() => {
     const map = new Map<string, IngredientSummaryRow>()
+    const notesByKey = new Map<string, string[]>()
+
+    const vagueByName = new Map<string, { display: string; amounts: string[] }>()
 
     allIngredientRows.forEach((row) => {
-      const ingredientName = row.ingredient.trim()
-      if (!ingredientName || !row.totalQty.trim()) {
+      const original = row.ingredient.trim()
+      if (!original || !row.totalQty.trim()) {
         return
       }
 
-      const key = [
-        ingredientName.toLowerCase(),
-        row.perServingUnit.trim().toLowerCase(),
-        row.totalUnit.trim().toLowerCase(),
-        row.note.trim().toLowerCase(),
-      ].join('|')
+      const name = canonicalName(original, ingredientAliases, BUILTIN_INGREDIENT_ALIASES)
+      // "適量" and other non-numbers: remembered per ingredient and shown on its main row.
+      if (!/^\s*\d/.test(row.totalQty)) {
+        const vague = vagueByName.get(name.key) ?? { display: name.display, amounts: [] }
+        if (!vague.amounts.includes(row.totalQty.trim())) {
+          vague.amounts.push(row.totalQty.trim())
+        }
+        vagueByName.set(name.key, vague)
+        return
+      }
 
-      if (!map.has(key)) {
-        map.set(key, {
-          ingredient: ingredientName,
-          perServingUnit: row.perServingUnit.trim(),
-          totalUnit: row.totalUnit.trim(),
-          note: row.note.trim(),
+      const total = canonicalUnit(row.totalUnit)
+      const key = `${name.key}|${total.unit}`
+      let target = map.get(key)
+      if (!target) {
+        target = {
+          key,
+          nameKey: name.key,
+          ingredient: name.display,
+          variants: [],
+          perServingUnit: '',
+          perServingMixed: false,
+          totalUnit: total.unit,
+          note: '',
           sumPerServingQty: 0,
           sumTotalQty: 0,
-        })
+          vagueAmounts: [],
+          unitConflict: false,
+        }
+        map.set(key, target)
       }
 
-      const target = map.get(key)
-      if (!target) {
-        return
+      target.sumTotalQty += toNumber(row.totalQty) * total.factor
+
+      if (original !== name.display && !target.variants.includes(original)) {
+        target.variants.push(original)
       }
 
-      target.sumPerServingQty += toNumber(row.perServingQty)
-      target.sumTotalQty += toNumber(row.totalQty)
+      const notes = notesByKey.get(key) ?? []
+      if (row.note.trim() && !notes.includes(row.note.trim())) {
+        notes.push(row.note.trim())
+      }
+      notesByKey.set(key, notes)
+
+      if (row.perServingQty.trim()) {
+        const perServing = canonicalUnit(row.perServingUnit)
+        if (!target.perServingUnit && target.sumPerServingQty === 0) {
+          target.perServingUnit = perServing.unit
+        }
+        if (perServing.unit === target.perServingUnit) {
+          target.sumPerServingQty += toNumber(row.perServingQty) * perServing.factor
+        } else {
+          target.perServingMixed = true
+        }
+      }
     })
 
-    return Array.from(map.values()).sort((a, b) => a.ingredient.localeCompare(b.ingredient, 'zh-Hant'))
-  }, [allIngredientRows])
+    vagueByName.forEach((vague, nameKey) => {
+      const main = Array.from(map.values()).find((row) => row.nameKey === nameKey)
+      if (main) {
+        main.vagueAmounts.push(...vague.amounts)
+        return
+      }
+      map.set(`${nameKey}|`, {
+        key: `${nameKey}|`,
+        nameKey,
+        ingredient: vague.display,
+        variants: [],
+        perServingUnit: '',
+        perServingMixed: false,
+        totalUnit: '',
+        note: '',
+        sumPerServingQty: 0,
+        sumTotalQty: 0,
+        vagueAmounts: vague.amounts,
+        unitConflict: false,
+      })
+    })
 
+    const unitCountByName = new Map<string, number>()
+    map.forEach((row) => unitCountByName.set(row.nameKey, (unitCountByName.get(row.nameKey) ?? 0) + 1))
+
+    return Array.from(map.values())
+      .map((row) => ({
+        ...row,
+        note: (notesByKey.get(row.key) ?? []).join(' / '),
+        unitConflict: (unitCountByName.get(row.nameKey) ?? 0) > 1,
+      }))
+      .sort((a, b) => a.ingredient.localeCompare(b.ingredient, 'zh-Hant'))
+  }, [allIngredientRows, ingredientAliases])
+
+  // Tools are counted per tool regardless of the counting word (個／把／支); the most common one is shown.
   const toolSummaryRows = useMemo<ToolSummaryRow[]>(() => {
     const map = new Map<string, ToolSummaryRow>()
+    const unitCounts = new Map<string, Map<string, number>>()
+    const notesByKey = new Map<string, string[]>()
 
     allToolRows.forEach((row) => {
-      const toolName = row.tool.trim()
-      if (!toolName || !row.qty.trim()) {
+      const original = row.tool.trim()
+      if (!original || !row.qty.trim()) {
         return
       }
 
-      const key = [toolName.toLowerCase(), row.unit.trim().toLowerCase(), row.note.trim().toLowerCase()].join('|')
-
-      if (!map.has(key)) {
-        map.set(key, {
-          tool: toolName,
-          unit: row.unit.trim(),
-          note: row.note.trim(),
-          sumQty: 0,
-        })
-      }
-
-      const target = map.get(key)
+      const name = canonicalName(original, toolAliases, BUILTIN_TOOL_ALIASES)
+      let target = map.get(name.key)
       if (!target) {
-        return
+        target = { key: name.key, tool: name.display, variants: [], unit: '', note: '', sumQty: 0 }
+        map.set(name.key, target)
       }
 
       target.sumQty += toNumber(row.qty)
+      if (original !== name.display && !target.variants.includes(original)) {
+        target.variants.push(original)
+      }
+
+      const unit = cleanDisplayName(row.unit)
+      if (unit) {
+        const counts = unitCounts.get(name.key) ?? new Map<string, number>()
+        counts.set(unit, (counts.get(unit) ?? 0) + 1)
+        unitCounts.set(name.key, counts)
+      }
+
+      const notes = notesByKey.get(name.key) ?? []
+      if (row.note.trim() && !notes.includes(row.note.trim())) {
+        notes.push(row.note.trim())
+      }
+      notesByKey.set(name.key, notes)
     })
 
-    return Array.from(map.values()).sort((a, b) => a.tool.localeCompare(b.tool, 'zh-Hant'))
-  }, [allToolRows])
+    return Array.from(map.values())
+      .map((row) => ({
+        ...row,
+        unit: Array.from(unitCounts.get(row.key)?.entries() ?? []).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '',
+        note: (notesByKey.get(row.key) ?? []).join(' / '),
+      }))
+      .sort((a, b) => a.tool.localeCompare(b.tool, 'zh-Hant'))
+  }, [allToolRows, toolAliases])
 
   const invalidIngredientRowIds = useMemo(
     () =>
@@ -1569,16 +1693,16 @@ function App() {
         const caption = [group.name, dishTitle, formatAmount(row.totalQty, row.totalUnit), row.note.trim()]
           .filter(Boolean)
           .join(' · ')
-        const key = name.toLowerCase()
+        const key = canonicalName(name, ingredientAliases, BUILTIN_INGREDIENT_ALIASES).key
         map.set(key, [...(map.get(key) ?? []), { url: row.image.url, caption }])
       })
     })
 
     return map
-  }, [groupData, nonSampleGroupIds])
+  }, [groupData, nonSampleGroupIds, ingredientAliases])
 
   const getIngredientReferences = (name: string): LightboxItem[] =>
-    ingredientReferencesByName.get(name.trim().toLowerCase()) ?? []
+    ingredientReferencesByName.get(canonicalIngredient(name).key) ?? []
 
   const uniqueSummaryIngredients = useMemo(() => {
     const list = new Set<string>()
@@ -1591,7 +1715,7 @@ function App() {
     const assignedStoreByIngredient = new Map<string, ShoppingStore>()
     shoppingStores.forEach((store) => {
       store.items.forEach((item) => {
-        const name = item.ingredient.trim()
+        const name = item.ingredient.trim() && canonicalName(item.ingredient, ingredientAliases, BUILTIN_INGREDIENT_ALIASES).key
         if (name && !assignedStoreByIngredient.has(name)) {
           assignedStoreByIngredient.set(name, store)
         }
@@ -1607,10 +1731,11 @@ function App() {
           return
         }
 
-        const key = `${name.toLowerCase()}|${row.totalUnit.trim().toLowerCase()}`
+        const unit = canonicalUnit(row.totalUnit)
+        const key = `${canonicalName(name, ingredientAliases, BUILTIN_INGREDIENT_ALIASES).key}|${unit.unit}`
         const byGroup = needsByKey.get(key) ?? new Map<GroupTab, GroupNeed>()
         const need = byGroup.get(groupId) ?? { groupId, groupName: group.name, qty: 0, dishTitles: [] }
-        need.qty += toNumber(row.totalQty)
+        need.qty += toNumber(row.totalQty) * unit.factor
         const dishTitle = group.dishes.find((dish) => dish.id === row.dishId)?.title.trim()
         if (dishTitle && !need.dishTitles.includes(dishTitle)) {
           need.dishTitles.push(dishTitle)
@@ -1620,30 +1745,19 @@ function App() {
       })
     })
 
-    const grouped = new Map<string, { ingredient: string; requiredTotal: number; totalUnit: string; note: string }>()
-    ingredientSummaryRows.forEach((row) => {
-      const adjustmentKey = `${row.ingredient}-${row.perServingUnit}-${row.totalUnit}-${row.note}`
-      const finalTotal = row.sumTotalQty + toNumber(ingredientAdjustments[adjustmentKey] ?? '')
-      const key = `${row.ingredient.toLowerCase()}|${row.totalUnit.trim().toLowerCase()}`
-      const existing = grouped.get(key)
-
-      if (!existing) {
-        grouped.set(key, { ingredient: row.ingredient, requiredTotal: finalTotal, totalUnit: row.totalUnit.trim(), note: row.note.trim() })
-        return
-      }
-
-      existing.requiredTotal += finalTotal
-      if (row.note.trim()) {
-        existing.note = [existing.note, row.note.trim()].filter(Boolean).join(' / ')
-      }
-    })
-
-    return Array.from(grouped.entries())
-      .map(([key, row]) => {
-        const store = assignedStoreByIngredient.get(row.ingredient) ?? null
+    return ingredientSummaryRows
+      .map((summary) => {
+        const row = {
+          ingredient: summary.ingredient,
+          requiredTotal: summary.sumTotalQty + toNumber(ingredientAdjustments[summary.key] ?? ''),
+          totalUnit: summary.totalUnit,
+          note: [summary.note, ...summary.vagueAmounts].filter(Boolean).join(' / '),
+        }
+        const key = summary.key
+        const store = assignedStoreByIngredient.get(summary.nameKey) ?? null
         return {
           ...row,
-          requiredDisplay: `${formatNumber(row.requiredTotal)}${row.totalUnit ? ` ${row.totalUnit}` : ''}`,
+          requiredDisplay: formatQuantity(row.requiredTotal, row.totalUnit),
           category: categorizeIngredient(row.ingredient),
           groupNeeds: Array.from(needsByKey.get(key)?.values() ?? []),
           suggestion: suggestPurchase(row.ingredient, row.requiredTotal, row.totalUnit, priceBook),
@@ -1656,12 +1770,37 @@ function App() {
           CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category) ||
           a.ingredient.localeCompare(b.ingredient, 'zh-Hant'),
       )
-  }, [groupData, ingredientAdjustments, ingredientSummaryRows, nonSampleGroupIds, priceBook, shoppingStores])
+  }, [groupData, ingredientAdjustments, ingredientAliases, ingredientSummaryRows, nonSampleGroupIds, priceBook, shoppingStores])
 
-  const overviewByIngredient = useMemo(
-    () => new Map(shoppingIngredientOverviewRows.map((row) => [row.ingredient, row])),
-    [shoppingIngredientOverviewRows],
-  )
+  // Canonical name -> its overview rows (more than one when groups used units that cannot be converted).
+  const overviewByIngredient = useMemo(() => {
+    const map = new Map<string, ShoppingIngredientOverviewRow[]>()
+    shoppingIngredientOverviewRows.forEach((row) => {
+      const key = normalizeNameText(row.ingredient)
+      map.set(key, [...(map.get(key) ?? []), row])
+    })
+    return map
+  }, [shoppingIngredientOverviewRows])
+
+  // Store items may still carry the spelling a group used; look them up by canonical name.
+  const findOverviewRows = (name: string) => overviewByIngredient.get(canonicalIngredient(name).key) ?? []
+  const findOverview = (name: string): ShoppingIngredientOverviewRow | undefined => findOverviewRows(name)[0]
+
+  // What is still to buy for a store item, e.g. "4 顆", or "6 顆 + 300 g" when units differ.
+  const describeNeed = (name: string, ownedQty: string) => {
+    const rows = findOverviewRows(name)
+    if (rows.length === 0) {
+      return null
+    }
+
+    if (rows.length === 1) {
+      const remaining = Math.max(rows[0].requiredTotal - toNumber(ownedQty), 0)
+      return { need: rows[0].requiredDisplay, remaining: formatQuantity(remaining, rows[0].totalUnit), mixed: false }
+    }
+
+    const text = rows.map((row) => row.requiredDisplay).join(' + ')
+    return { need: text, remaining: text, mixed: true }
+  }
 
   const unassignedShoppingIngredientCount = shoppingIngredientOverviewRows.filter((row) => !row.assignedStoreId).length
 
@@ -1685,7 +1824,7 @@ function App() {
 
   // Cheapest estimate for an item at this particular store, after subtracting what is already at home.
   const estimateItemAtStore = (item: ShoppingStoreItem, storeName: string) => {
-    const row = overviewByIngredient.get(item.ingredient)
+    const row = findOverview(item.ingredient)
     if (!row) {
       return null
     }
@@ -1739,7 +1878,7 @@ function App() {
       const receiptScale = toNumber(store.receiptTotal ?? '') > 0 && stats.itemSum > 0 ? stats.spent / stats.itemSum : 1
 
       store.items.forEach((item) => {
-        const row = overviewByIngredient.get(item.ingredient)
+        const row = findOverview(item.ingredient)
         const totalNeed = row?.groupNeeds.reduce((sum, need) => sum + need.qty, 0) ?? 0
         if (!row || totalNeed === 0) {
           return
@@ -1759,11 +1898,6 @@ function App() {
 
     return Array.from(totals.entries()).map(([groupId, value]) => ({ groupId, ...value }))
   })()
-
-  const summaryIngredientSet = useMemo(
-    () => new Set(uniqueSummaryIngredients),
-    [uniqueSummaryIngredients],
-  )
 
   const updateIngredientRow = (
     groupName: GroupTab,
@@ -2740,11 +2874,13 @@ function App() {
   // Moves an ingredient to another store (or back to unassigned), keeping what was already entered.
   const assignIngredientToStore = (ingredient: string, storeId: number | null) => {
     setShoppingStores((prev) => {
-      const existing = prev.flatMap((store) => store.items).find((item) => item.ingredient === ingredient)
+      const target = canonicalIngredient(ingredient).key
+      const sameIngredient = (name: string) => canonicalIngredient(name).key === target
+      const existing = prev.flatMap((store) => store.items).find((item) => sameIngredient(item.ingredient))
       const item = existing ?? { id: Date.now(), ingredient, price: '', ownedQty: '' }
 
       return prev.map((store) => {
-        const items = store.items.filter((entry) => entry.ingredient !== ingredient)
+        const items = store.items.filter((entry) => !sameIngredient(entry.ingredient))
         return store.id === storeId ? { ...store, items: [...items, item] } : { ...store, items }
       })
     })
@@ -2753,7 +2889,10 @@ function App() {
   const assignIngredientToNewStore = (ingredient: string, storeName: string) => {
     const storeId = Date.now()
     setShoppingStores((prev) => [
-      ...prev.map((store) => ({ ...store, items: store.items.filter((item) => item.ingredient !== ingredient) })),
+      ...prev.map((store) => ({
+        ...store,
+        items: store.items.filter((item) => canonicalIngredient(item.ingredient).key !== canonicalIngredient(ingredient).key),
+      })),
       { id: storeId, storeName, items: [{ id: storeId + 1, ingredient, price: '', ownedQty: '' }] },
     ])
   }
@@ -2779,7 +2918,8 @@ function App() {
           store = { id: seed + 1000 + stores.length, storeName: target, items: [] }
           stores.push(store)
         }
-        if (!store.items.some((item) => item.ingredient === row.ingredient)) {
+        const rowKey = canonicalIngredient(row.ingredient).key
+        if (!store.items.some((item) => canonicalIngredient(item.ingredient).key === rowKey)) {
           store.items.push({ id: seed + index, ingredient: row.ingredient, price: '', ownedQty: '' })
         }
       })
@@ -2823,16 +2963,15 @@ function App() {
   const copyStoreList = async (store: ShoppingStore) => {
     const lines = [`【${store.storeName.trim() || '採買清單'}】共 ${store.items.length} 項`]
     CATEGORY_ORDER.forEach((category) => {
-      const items = store.items.filter((item) => overviewByIngredient.get(item.ingredient)?.category === category)
+      const items = store.items.filter((item) => findOverview(item.ingredient)?.category === category)
       if (items.length === 0) {
         return
       }
 
       lines.push('', `▍${category}`)
       items.forEach((item) => {
-        const row = overviewByIngredient.get(item.ingredient)
-        const remaining = row ? Math.max(row.requiredTotal - toNumber(item.ownedQty ?? ''), 0) : 0
-        const amount = row ? `${formatNumber(remaining)}${row.totalUnit}` : ''
+        const row = findOverview(item.ingredient)
+        const amount = describeNeed(item.ingredient, item.ownedQty ?? '')?.remaining ?? ''
         const note = row?.note ? `（${row.note}）` : ''
         lines.push(`${item.purchased ? '☑' : '☐'} ${item.ingredient} ${amount}${note}`)
       })
@@ -2863,17 +3002,39 @@ function App() {
     setPriceBook((prev) => prev.filter((entry) => entry.id !== id))
   }
 
-  const allAssignedIngredients = useMemo(() => {
-    const assigned = new Set<string>()
-    shoppingStores.forEach((store) => {
-      store.items.forEach((item) => {
-        if (item.ingredient && summaryIngredientSet.has(item.ingredient)) {
-          assigned.add(item.ingredient)
-        }
-      })
+  // Canonical keys of every ingredient already placed in a store.
+  const allAssignedIngredients = new Set(
+    shoppingStores.flatMap((store) =>
+      store.items.filter((item) => item.ingredient.trim()).map((item) => canonicalIngredient(item.ingredient).key),
+    ),
+  )
+
+  // ---------- Name merging (admin) ----------
+  const addNameAlias = (kind: 'ingredient' | 'tool', from: string, to: string) => {
+    const fromKey = normalizeNameText(from)
+    const target = cleanDisplayName(to)
+    const resolve = kind === 'ingredient' ? canonicalIngredient : canonicalTool
+    // Skip empty input and anything that would point a name back at itself.
+    if (!fromKey || !target || resolve(target).key === fromKey) {
+      return
+    }
+
+    const setAliases = kind === 'ingredient' ? setIngredientAliases : setToolAliases
+    setAliases((previous) => ({ ...previous, [fromKey]: target }))
+  }
+
+  const removeNameAlias = (kind: 'ingredient' | 'tool', fromKey: string) => {
+    const setAliases = kind === 'ingredient' ? setIngredientAliases : setToolAliases
+    setAliases((previous) => {
+      const next = { ...previous }
+      delete next[fromKey]
+      return next
     })
-    return assigned
-  }, [shoppingStores, summaryIngredientSet])
+  }
+
+  const dismissNamePair = (a: string, b: string) => {
+    setDismissedNamePairs((previous) => Array.from(new Set([...previous, pairKey(a, b)])))
+  }
 
   const exportGroupRecipesToWord = async (
     groupName: GroupTab,
@@ -3302,6 +3463,141 @@ function App() {
           <span className="link-card-sub">{isThumbnailLoading ? '正在載入縮圖…' : '開啟連結 ↗'}</span>
         </span>
       </a>
+    )
+  }
+
+  // Admin panel to treat different spellings as one item in summaries and shopping.
+  const renderNameMerge = (kind: 'ingredient' | 'tool') => {
+    const isIngredient = kind === 'ingredient'
+    const names = isIngredient
+      ? Array.from(new Set(ingredientSummaryRows.map((row) => row.ingredient)))
+      : toolSummaryRows.map((row) => row.tool)
+    const typedNames = Array.from(
+      new Set(
+        nonSampleGroupIds.flatMap((groupId) =>
+          isIngredient
+            ? groupData[groupId].ingredientRows.map((row) => cleanDisplayName(row.ingredient))
+            : groupData[groupId].toolRows.map((row) => cleanDisplayName(row.tool)),
+        ),
+      ),
+    ).filter(Boolean)
+    // Offer the spelling that is in the library first (砂糖 rather than 沙糖).
+    const libraryKeys = new Set((isIngredient ? ingredientLibrary : toolLibrary).map(normalizeNameText))
+    const suggestions = suggestDuplicateNames(names, new Set(dismissedNamePairs)).map(([a, b]): [string, string] =>
+      libraryKeys.has(normalizeNameText(b)) && !libraryKeys.has(normalizeNameText(a)) ? [b, a] : [a, b],
+    )
+    const aliases = Object.entries(isIngredient ? ingredientAliases : toolAliases)
+    const conflicts = isIngredient
+      ? Array.from(new Set(ingredientSummaryRows.filter((row) => row.unitConflict).map((row) => row.ingredient)))
+      : []
+    const label = isIngredient ? '食材' : '工具'
+    const datalistId = `merge-${kind}-names`
+
+    return (
+      <section className="card">
+        <header className="card-head">
+          <span className="store-icon" aria-hidden="true">
+            <Icon name="link" size={15} />
+          </span>
+          <h3 className="card-title">名稱整併</h3>
+          <span className="muted small merge-intro">
+            寫法不同但其實是同一樣{label}時，在這裡合併，總表和採買就會一起加總；各組填的原始內容不會被改動。
+          </span>
+          {suggestions.length > 0 && <span className="chip chip-warn">待確認 {suggestions.length}</span>}
+        </header>
+        <div className="card-body">
+          {suggestions.length > 0 && (
+            <div className="merge-suggestions">
+              <p className="field-label">可能是同一樣{label}</p>
+              {suggestions.map(([a, b]) => (
+                <div key={pairKey(a, b)} className="merge-suggestion">
+                  <span className="merge-pair">
+                    <strong>{a}</strong>
+                    <span className="muted">／</span>
+                    <strong>{b}</strong>
+                  </span>
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={() => addNameAlias(kind, b, a)}>
+                    合併為「{a}」
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-xs" onClick={() => addNameAlias(kind, a, b)}>
+                    合併為「{b}」
+                  </button>
+                  <button type="button" className="btn-link" onClick={() => dismissNamePair(a, b)}>
+                    不是同一樣
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {conflicts.length > 0 && (
+            <p className="merge-warning">
+              「{conflicts.join('、')}」有些組用重量、有些用個數（例如 g 和顆），無法自動相加，已分開列出並標示「單位不一」。
+              可以用調整量補正，或請該組改成同一種單位。
+            </p>
+          )}
+
+          <form
+            className="merge-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              addNameAlias(kind, aliasDraft.from, aliasDraft.to)
+              setAliasDraft({ from: '', to: '' })
+            }}
+          >
+            <span>把</span>
+            <input
+              className="input input-sm"
+              list={datalistId}
+              value={aliasDraft.from}
+              onChange={(event) => setAliasDraft((previous) => ({ ...previous, from: event.target.value }))}
+              placeholder={isIngredient ? '例如：洋芋' : '例如：煎鍋'}
+              aria-label="要合併的寫法"
+            />
+            <span>算成</span>
+            <input
+              className="input input-sm"
+              list={datalistId}
+              value={aliasDraft.to}
+              onChange={(event) => setAliasDraft((previous) => ({ ...previous, to: event.target.value }))}
+              placeholder={isIngredient ? '例如：馬鈴薯' : '例如：平底鍋'}
+              aria-label="統一成的名稱"
+            />
+            <button type="submit" className="btn btn-sm" disabled={!aliasDraft.from.trim() || !aliasDraft.to.trim()}>
+              合併
+            </button>
+            <datalist id={datalistId}>
+              {Array.from(new Set([...names, ...typedNames])).map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
+          </form>
+
+          {aliases.length > 0 && (
+            <ul className="tag-list">
+              {aliases.map(([fromKey, to]) => (
+                <li key={fromKey} className="tag">
+                  {fromKey} → {to}
+                  <button
+                    type="button"
+                    className="tag-remove"
+                    onClick={() => removeNameAlias(kind, fromKey)}
+                    aria-label={`取消「${fromKey}」的合併`}
+                  >
+                    <Icon name="close" size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <p className="muted small">
+            {isIngredient
+              ? '已內建常見寫法，不用另外設定：蕃茄→番茄、起士→起司、鮮奶→牛奶、洋芋→馬鈴薯、全形／半形與空白。單位會自動換算：克、公克、公斤、斤→g；cc、毫升、公升→ml；大匙＝15ml、小匙＝5ml；個＝顆、袋＝包。'
+              : '已內建常見寫法，不用另外設定：刀子→菜刀、煎鍋→平底鍋、切菜板→砧板。工具的「個／把／支」視為同一種計數，會直接相加。'}
+          </p>
+        </div>
+      </section>
     )
   }
 
@@ -4055,6 +4351,8 @@ function App() {
         )}
 
         {currentTab === '食材總表' && adminUnlocked && (
+          <>
+          {renderNameMerge('ingredient')}
           <section className="card">
             <header className="card-head">
               <h2 className="card-title">食材總表</h2>
@@ -4084,7 +4382,7 @@ function App() {
                     </tr>
                   )}
                   {ingredientSummaryRows.map((row) => {
-                    const key = `${row.ingredient}-${row.perServingUnit}-${row.totalUnit}-${row.note}`
+                    const key = row.key
                     const adjustment = toNumber(ingredientAdjustments[key] ?? '')
                     const finalTotal = row.sumTotalQty + adjustment
                     const isPrepared = Boolean(preparedSummaryIngredients[key])
@@ -4108,12 +4406,21 @@ function App() {
                         <td className="strong">
                           <span className="name-with-thumb">
                             {renderReferenceThumb(row.ingredient)}
-                            {row.ingredient}
+                            <span className="merged-name">
+                              {row.ingredient}
+                              {row.unitConflict && <span className="chip chip-warn">單位不一</span>}
+                              {row.variants.length > 0 && (
+                                <span className="merged-from">含：{row.variants.join('、')}</span>
+                              )}
+                            </span>
                           </span>
                         </td>
-                        <td className="num">{formatNumber(row.sumPerServingQty)}</td>
-                        <td>{row.perServingUnit}</td>
-                        <td className="num">{formatNumber(row.sumTotalQty)}</td>
+                        <td className="num">{row.perServingMixed ? '單位不一' : formatNumber(row.sumPerServingQty)}</td>
+                        <td>{row.perServingMixed ? '' : row.perServingUnit}</td>
+                        <td className="num">
+                          {formatNumber(row.sumTotalQty)}
+                          {row.vagueAmounts.length > 0 && <span className="merged-from">另有：{row.vagueAmounts.join('、')}</span>}
+                        </td>
                         <td className="num">
                           <input
                             className="cell-input cell-input-num"
@@ -4139,9 +4446,12 @@ function App() {
               </table>
             </div>
           </section>
+          </>
         )}
 
         {currentTab === '工具總表' && adminUnlocked && (
+          <>
+          {renderNameMerge('tool')}
           <section className="card">
             <header className="card-head">
               <h2 className="card-title">工具總表</h2>
@@ -4169,7 +4479,7 @@ function App() {
                     </tr>
                   )}
                   {toolSummaryRows.map((row) => {
-                    const key = `${row.tool}-${row.unit}-${row.note}`
+                    const key = row.key
                     const adjustment = toNumber(toolAdjustments[key] ?? '')
                     const finalTotal = row.sumQty + adjustment
                     const isPrepared = Boolean(preparedSummaryTools[key])
@@ -4190,7 +4500,12 @@ function App() {
                             aria-label={`標記 ${row.tool} 是否已備妥`}
                           />
                         </td>
-                        <td className="strong">{row.tool}</td>
+                        <td className="strong">
+                          <span className="merged-name">
+                            {row.tool}
+                            {row.variants.length > 0 && <span className="merged-from">含：{row.variants.join('、')}</span>}
+                          </span>
+                        </td>
                         <td className="num">{formatNumber(row.sumQty)}</td>
                         <td className="num">
                           <input
@@ -4217,6 +4532,7 @@ function App() {
               </table>
             </div>
           </section>
+          </>
         )}
 
         {currentTab === TOOL_LIBRARY_TAB && adminUnlocked && (
@@ -4395,7 +4711,12 @@ function App() {
                                         <img src={rowImage.url} alt="" loading="lazy" />
                                       </button>
                                     )}
-                                    {row.ingredient}
+                                    <span className="merged-name">
+                                      {row.ingredient}
+                                      {canonicalIngredient(row.ingredient).display !== cleanDisplayName(row.ingredient) && (
+                                        <span className="merged-from">統計為「{canonicalIngredient(row.ingredient).display}」</span>
+                                      )}
+                                    </span>
                                   </span>
                                 </td>
                                 <td className="num">{row.perServingQty || '–'}</td>
@@ -4472,7 +4793,14 @@ function App() {
                                     aria-label={`標記 ${groupName} ${row.tool} 是否已備妥`}
                                   />
                                 </td>
-                                <td className="strong">{row.tool}</td>
+                                <td className="strong">
+                                  <span className="merged-name">
+                                    {row.tool}
+                                    {canonicalTool(row.tool).display !== cleanDisplayName(row.tool) && (
+                                      <span className="merged-from">統計為「{canonicalTool(row.tool).display}」</span>
+                                    )}
+                                  </span>
+                                </td>
                                 <td className="num">{row.qty || '–'}</td>
                                 <td>{row.unit || '–'}</td>
                                 <td className="muted">{row.note}</td>
@@ -4805,7 +5133,7 @@ function App() {
                       {store.items.length === 0 && <p className="empty">尚未加入食材，請在上方「分配採買地點」選擇這間店。</p>}
                       {[...CATEGORY_ORDER, ''].map((category) => {
                         const items = store.items.filter((item) =>
-                          category ? overviewByIngredient.get(item.ingredient)?.category === category : !overviewByIngredient.has(item.ingredient),
+                          category ? findOverview(item.ingredient)?.category === category : !findOverview(item.ingredient),
                         )
                         if (items.length === 0) {
                           return null
@@ -4815,8 +5143,8 @@ function App() {
                           <Fragment key={category || 'unmatched'}>
                             <p className="shop-category">{category || '未對應到食材總表'}</p>
                             {items.map((item) => {
-                              const row = overviewByIngredient.get(item.ingredient)
-                              const remainingQty = Math.max((row?.requiredTotal ?? 0) - toNumber(item.ownedQty ?? ''), 0)
+                              const row = findOverview(item.ingredient)
+                              const need = describeNeed(item.ingredient, item.ownedQty ?? '')
                               const estimate = estimateItemAtStore(item, store.storeName)
 
                               return (
@@ -4849,9 +5177,9 @@ function App() {
                                       >
                                         <option value="">選擇食材</option>
                                         {uniqueSummaryIngredients.map((name) => (
-                                          <option key={name} value={name} disabled={allAssignedIngredients.has(name)}>
+                                          <option key={name} value={name} disabled={allAssignedIngredients.has(canonicalIngredient(name).key)}>
                                             {name}
-                                            {allAssignedIngredients.has(name) ? '（已排定）' : ''}
+                                            {allAssignedIngredients.has(canonicalIngredient(name).key) ? '（已排定）' : ''}
                                           </option>
                                         ))}
                                       </select>
@@ -4865,7 +5193,7 @@ function App() {
                                     {estimate && <span className="shop-estimate">{estimate.label}</span>}
                                   </div>
                                   <span className="shop-need num" data-label="需求">
-                                    {row?.requiredDisplay ?? '–'}
+                                    {need?.need ?? '–'}
                                   </span>
                                   <span className="shop-owned" data-label="家中已有">
                                     <input
@@ -4879,17 +5207,11 @@ function App() {
                                       }
                                       placeholder="0"
                                       aria-label="家中已有"
-                                      disabled={!row}
+                                      disabled={!need || need.mixed}
                                     />
                                   </span>
                                   <span className="shop-remaining num" data-label="還要買">
-                                    {row ? (
-                                      <>
-                                        <strong>{formatNumber(remainingQty)}</strong> {row.totalUnit}
-                                      </>
-                                    ) : (
-                                      '–'
-                                    )}
+                                    {need ? <strong>{need.remaining}</strong> : '–'}
                                   </span>
                                   <span className="shop-price" data-label="實付">
                                     <input
@@ -5284,7 +5606,7 @@ function App() {
 
               <div className="shop-mode-body">
                 {CATEGORY_ORDER.map((category) => {
-                  const categoryItems = items.filter((item) => overviewByIngredient.get(item.ingredient)?.category === category)
+                  const categoryItems = items.filter((item) => findOverview(item.ingredient)?.category === category)
                   if (categoryItems.length === 0) {
                     return null
                   }
@@ -5293,8 +5615,8 @@ function App() {
                     <section key={category} className="shop-mode-section">
                       <h4>{category}</h4>
                       {categoryItems.map((item) => {
-                        const row = overviewByIngredient.get(item.ingredient)
-                        const remaining = Math.max((row?.requiredTotal ?? 0) - toNumber(item.ownedQty ?? ''), 0)
+                        const row = findOverview(item.ingredient)
+                        const need = describeNeed(item.ingredient, item.ownedQty ?? '')
                         const estimate = estimateItemAtStore(item, store.storeName)
                         const toggle = () => updateShoppingStoreItem(store.id, item.id, 'purchased', !item.purchased)
 
@@ -5315,7 +5637,7 @@ function App() {
                             <button type="button" className="shop-mode-info" onClick={toggle}>
                               <span className="shop-mode-name">{item.ingredient}</span>
                               <span className="shop-mode-qty">
-                                買 <strong>{formatNumber(remaining)}</strong> {row?.totalUnit}
+                                買 <strong>{need?.remaining ?? '–'}</strong>
                               </span>
                               {Boolean(row?.note || row?.groupNeeds.length) && (
                                 <span className="shop-mode-note">
