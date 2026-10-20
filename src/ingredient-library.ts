@@ -2,9 +2,6 @@
 // Add or remove items here to maintain your default ingredient suggestions.
 export const INGREDIENT_LIBRARY_SEED: string[] = [
   // Fresh vegetables
-  '洋蔥',
-  '青蔥',
-  '蒜頭',
   '薑',
   '南薑',
   '黃薑',
@@ -95,7 +92,6 @@ export const INGREDIENT_LIBRARY_SEED: string[] = [
   '素鬆',
   '小肉豆',
   '火腿漿',
-  '鮪魚罐頭',
   '滷蛋',
   // Dairy and eggs
   '雞蛋',
@@ -152,8 +148,6 @@ export const INGREDIENT_LIBRARY_SEED: string[] = [
   '糯米粉',
   '豆花粉',
   '酥炸粉',
-  '吉利丁',
-  '吉利丁粉',
   '素吉利丁',
   '可可粉',
   '巧克力粉',
@@ -196,7 +190,6 @@ export const INGREDIENT_LIBRARY_SEED: string[] = [
   '芝麻醬',
   '胡麻醬',
   '芥末醬',
-  '蠔油',
   '素蠔油',
   '辣油',
   '羅望子',
@@ -248,7 +241,6 @@ export const INGREDIENT_LIBRARY_SEED: string[] = [
   '橄欖油',
   '玄米油',
   '椰子油',
-  '牛油',
   '米酒',
   '檸檬汁',
   '燕麥奶',
@@ -262,4 +254,26 @@ export const INGREDIENT_LIBRARY_SEED: string[] = [
   '玉米罐頭',
   '冰塊',
   '水',
+]
+
+// 蛋奶素：不含五辛（蔥、蒜、韭、洋蔥、蕗蕎）與葷食材料。
+// 即使雲端食材庫裡已存在這些項目，也會在載入時被過濾掉。
+export const INGREDIENT_LIBRARY_BLOCKLIST: string[] = [
+  '洋蔥',
+  '紅蔥頭',
+  '油蔥酥',
+  '青蔥',
+  '蔥',
+  '蒜頭',
+  '大蒜',
+  '蒜',
+  '蒜苗',
+  '韭菜',
+  '韭黃',
+  '蕗蕎',
+  '鮪魚罐頭',
+  '蠔油',
+  '吉利丁',
+  '吉利丁粉',
+  '牛油',
 ]
