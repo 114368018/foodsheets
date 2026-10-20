@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app'
-import { getFirestore } from 'firebase/firestore'
+import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore'
 import { getStorage } from 'firebase/storage'
 
 const firebaseConfig = {
@@ -28,6 +28,13 @@ const hasRequiredFirebaseConfig = Boolean(
 const app = hasRequiredFirebaseConfig ? initializeApp(firebaseConfig) : null
 
 export const db = app ? getFirestore(app) : null
+
+// Local testing against the Firestore emulator, e.g. VITE_FIRESTORE_EMULATOR_HOST=127.0.0.1:8085
+const emulatorHost = import.meta.env.VITE_FIRESTORE_EMULATOR_HOST
+if (db && emulatorHost) {
+  const [host, port] = emulatorHost.split(':')
+  connectFirestoreEmulator(db, host, Number(port))
+}
 export const storage = app ? getStorage(app) : null
 export const isFirebaseConfigured = hasRequiredFirebaseConfig
 export const isFirebaseStorageConfigured = Boolean(hasRequiredFirebaseConfig && firebaseConfig.storageBucket)

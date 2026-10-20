@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClipboardEvent as ReactClipboardEvent, DragEvent as ReactDragEvent, SetStateAction } from 'react'
 import { deleteDoc, doc, onSnapshot, runTransaction } from 'firebase/firestore'
 import {
@@ -30,6 +30,20 @@ import {
   type ParsedIngredient,
 } from './ingredient-parse'
 import { Icon, type IconName } from './icons'
+import {
+  CATEGORY_ORDER,
+  STORE_KINDS,
+  categorizeIngredient,
+  estimateWithEntry,
+  findPriceEntries,
+  formatMoney,
+  formatPack,
+  storeKindOf,
+  suggestPurchase,
+  type PriceEntry,
+  type Suggestion,
+} from './shopping'
+import { PRICE_REFERENCE_SEED, PRICE_REFERENCE_UPDATED } from './price-reference'
 
 // Group ids are stable keys in groupData. Legacy groups use their original name as id.
 const SAMPLE_GROUP_TAB = '範例組' as const
@@ -50,6 +64,7 @@ const GROUP_INGREDIENT_LIBRARY_TAB = '各組食材表' as const
 const GROUP_TOOL_LIBRARY_TAB = '各組工具表' as const
 const CHANGELOG_TAB = '版本日誌' as const
 const SHOPPING_LIST_TAB = '食材採買' as const
+const PRICE_TAB = '價格參考' as const
 const ADMIN_PASSCODE = 'admin'
 const STORAGE_KEY = 'foodsheets.v1.state'
 const RESET_CONFIRM_PHRASE = '全部歸零'
@@ -68,6 +83,7 @@ const ADMIN_TAB_ICONS: Record<string, IconName> = {
   食材總表: 'grid',
   工具總表: 'box',
   食材採買: 'cart',
+  價格參考: 'tag',
   工具庫: 'book',
   食材庫: 'book',
 }
@@ -78,6 +94,7 @@ const ADMIN_TABS: TabName[] = [
   '食材總表',
   '工具總表',
   SHOPPING_LIST_TAB,
+  PRICE_TAB,
   TOOL_LIBRARY_TAB,
   INGREDIENT_LIBRARY_TAB,
 ]
@@ -94,6 +111,8 @@ type ShoppingStore = {
   id: number
   storeName: string
   items: ShoppingStoreItem[]
+  // What the receipt actually says; when empty, spending is the sum of item prices.
+  receiptTotal?: string
 }
 
 type IngredientRow = {
@@ -192,6 +211,7 @@ type SharedState = {
   preparedGroupIngredients: Record<string, boolean>
   preparedGroupTools: Record<string, boolean>
   shoppingStores: ShoppingStore[]
+  priceBook: PriceEntry[]
 }
 
 // `data` is what this client shows; `base` is the last cloud state it saw (null = never synced).
@@ -206,12 +226,23 @@ type PersistedState = SyncState & {
   currentTab: TabName
 }
 
+type GroupNeed = {
+  groupId: GroupTab
+  groupName: string
+  qty: number
+  dishTitles: string[]
+}
+
 type ShoppingIngredientOverviewRow = {
   ingredient: string
   requiredTotal: number
   totalUnit: string
   requiredDisplay: string
   note: string
+  category: string
+  groupNeeds: GroupNeed[]
+  suggestion: Suggestion
+  assignedStoreId: number | null
   assignedStoreName: string | null
 }
 
@@ -550,6 +581,39 @@ const getGroupIdOffset = (groupId: GroupTab, orderIndex: number): number => {
   return (legacyIndex >= 0 ? legacyIndex + 1 : 100 + orderIndex) * 1000
 }
 
+// Ids below this were generated from group offsets (e.g. 2201); user-added ones use Date.now().
+const LEGACY_DEFAULT_ID_LIMIT = 1_000_000
+
+// Duplicate ids break React keys (a stale card leaked into every group) and id-based merging.
+// Exact copies are dropped; a different item sharing an id gets a new, deterministic id.
+const dedupeById = <T extends { id: number }>(items: T[]): T[] => {
+  const seen = new Map<number, T>()
+  const result: T[] = []
+
+  items.forEach((item, index) => {
+    const existing = seen.get(item.id)
+    if (!existing) {
+      seen.set(item.id, item)
+      result.push(item)
+      return
+    }
+
+    if (deepEqual(existing, item)) {
+      return
+    }
+
+    let nextId = item.id * 100 + index
+    while (seen.has(nextId)) {
+      nextId += 1
+    }
+    const renumbered = { ...item, id: nextId }
+    seen.set(nextId, renumbered)
+    result.push(renumbered)
+  })
+
+  return result
+}
+
 const normalizeGroup = (source: unknown, groupId: GroupTab, groupOffset: number): GroupData => {
   if (!source || typeof source !== 'object') {
     return createEmptyGroup(groupId, groupOffset)
@@ -572,11 +636,33 @@ const normalizeGroup = (source: unknown, groupId: GroupTab, groupOffset: number)
       })
     : []
 
+  normalizedDishes = dedupeById(normalizedDishes)
+
   const legacyThirdDishId = groupOffset + 203
   const legacyThirdDish = normalizedDishes.find((dish) => dish.id === legacyThirdDishId)
   if (legacyThirdDish && isDishContentEmpty(legacyThirdDish)) {
     normalizedDishes = normalizedDishes.filter((dish) => dish.id !== legacyThirdDishId)
   }
+
+  const rawIngredientRows: unknown[] = Array.isArray(sourceObj.ingredientRows) ? sourceObj.ingredientRows : []
+  const dishIdsWithContent = new Set(
+    rawIngredientRows
+      .map((row) => (row ?? {}) as Record<string, unknown>)
+      .filter((row) => typeof row.ingredient === 'string' && row.ingredient.trim())
+      .map((row) => Number(row.dishId)),
+  )
+  // Old versions shifted default dish ids when groups were reordered and then merged both
+  // sets back together, leaving empty "ghost" dishes in every group. Drop those ghosts.
+  const ownDefaultDishIds = new Set([groupOffset + 201, groupOffset + 202, groupOffset + 203])
+  normalizedDishes = normalizedDishes.filter(
+    (dish) =>
+      !(
+        dish.id < LEGACY_DEFAULT_ID_LIMIT &&
+        !ownDefaultDishIds.has(dish.id) &&
+        isDishContentEmpty(dish) &&
+        !dishIdsWithContent.has(dish.id)
+      ),
+  )
 
   while (normalizedDishes.length < MIN_DISH_COUNT) {
     normalizedDishes.push(emptyDish(groupOffset + 201 + normalizedDishes.length))
@@ -622,8 +708,8 @@ const normalizeGroup = (source: unknown, groupId: GroupTab, groupOffset: number)
     teamName: typeof sourceObj.teamName === 'string' ? sourceObj.teamName : '',
     cuisineType: typeof sourceObj.cuisineType === 'string' ? sourceObj.cuisineType : '',
     dishes: normalizedDishes,
-    ingredientRows: normalizedIngredientRows.filter((row) => validDishIds.has(row.dishId)),
-    toolRows: normalizedToolRows,
+    ingredientRows: dedupeById(normalizedIngredientRows.filter((row) => validDishIds.has(row.dishId))),
+    toolRows: dedupeById(normalizedToolRows),
   }
 }
 
@@ -670,6 +756,27 @@ const normalizeShoppingStores = (input: unknown): ShoppingStore[] => {
               ...(typeof item.purchased === 'boolean' ? { purchased: item.purchased } : {}),
             }))
         : [],
+      ...(typeof store.receiptTotal === 'string' && store.receiptTotal ? { receiptTotal: store.receiptTotal } : {}),
+    }))
+}
+
+// The seed is used only until a price book has been saved, so admin edits and deletions stick.
+const normalizePriceBook = (input: unknown): PriceEntry[] => {
+  if (!Array.isArray(input)) {
+    return PRICE_REFERENCE_SEED
+  }
+
+  return input
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+    .map((entry) => ({
+      id: Number(entry.id) || 0,
+      ingredient: typeof entry.ingredient === 'string' ? entry.ingredient : '',
+      store: typeof entry.store === 'string' ? entry.store : '',
+      price: typeof entry.price === 'string' ? entry.price : '',
+      packQty: typeof entry.packQty === 'string' ? entry.packQty : '',
+      packUnit: typeof entry.packUnit === 'string' ? entry.packUnit : '',
+      spec: typeof entry.spec === 'string' ? entry.spec : '',
+      ...(entry.loose === true ? { loose: true } : {}),
     }))
 }
 
@@ -696,6 +803,7 @@ const normalizeSharedState = (input: unknown): SharedState => {
     preparedGroupIngredients: toBooleanRecord(raw.preparedGroupIngredients),
     preparedGroupTools: toBooleanRecord(raw.preparedGroupTools),
     shoppingStores: normalizeShoppingStores(raw.shoppingStores),
+    priceBook: normalizePriceBook(raw.priceBook),
   }
 }
 
@@ -1119,6 +1227,7 @@ function App() {
     preparedGroupIngredients,
     preparedGroupTools,
     shoppingStores,
+    priceBook,
   } = syncState.data
 
   // Per-field setters over the single shared state, so call sites read like plain useState setters.
@@ -1143,6 +1252,7 @@ function App() {
   const setPreparedGroupIngredients = sharedFieldSetter('preparedGroupIngredients')
   const setPreparedGroupTools = sharedFieldSetter('preparedGroupTools')
   const setShoppingStores = sharedFieldSetter('shoppingStores')
+  const setPriceBook = sharedFieldSetter('priceBook')
 
   const [groupCollapseState, setGroupCollapseState] = useState<Record<GroupTab, GroupCollapseState>>({})
   const [adminUnlocked, setAdminUnlocked] = useState(false)
@@ -1174,12 +1284,13 @@ function App() {
   const [showWordExportOptions, setShowWordExportOptions] = useState(false)
   const [wordExportMode, setWordExportMode] = useState<WordExportMode>('all')
   const [selectedDishIdForWord, setSelectedDishIdForWord] = useState<number | null>(null)
-  const [shoppingOverviewExpanded, setShoppingOverviewExpanded] = useState(false)
+  const [shoppingOverviewExpanded, setShoppingOverviewExpanded] = useState(true)
   const [shoppingOverviewFilter, setShoppingOverviewFilter] = useState<'unassigned' | 'all'>('unassigned')
   const [shoppingOverviewQuery, setShoppingOverviewQuery] = useState('')
-  const [shoppingOverviewShowAll, setShoppingOverviewShowAll] = useState(false)
-  const [shoppingOverviewSelectedIngredients, setShoppingOverviewSelectedIngredients] = useState<Record<string, boolean>>({})
-  const [shoppingOverviewTargetStoreId, setShoppingOverviewTargetStoreId] = useState<number | null>(null)
+  const [copiedStoreId, setCopiedStoreId] = useState<number | null>(null)
+  const [shoppingModeStoreId, setShoppingModeStoreId] = useState<number | null>(null)
+  const [shoppingModeHideDone, setShoppingModeHideDone] = useState(false)
+  const [priceQuery, setPriceQuery] = useState('')
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncRetryTick, setSyncRetryTick] = useState(0)
   const [syncStatus, setSyncStatus] = useState(
@@ -1475,37 +1586,49 @@ function App() {
     return Array.from(list).sort((a, b) => a.localeCompare(b, 'zh-Hant'))
   }, [ingredientSummaryRows])
 
+  // One row per ingredient (name + unit): total needed, which groups need it, where to buy it and what it should cost.
   const shoppingIngredientOverviewRows = useMemo<ShoppingIngredientOverviewRow[]>(() => {
-    const grouped = new Map<string, ShoppingIngredientOverviewRow>()
-    const assignedStoreNameByIngredient = new Map<string, string>()
-
+    const assignedStoreByIngredient = new Map<string, ShoppingStore>()
     shoppingStores.forEach((store) => {
       store.items.forEach((item) => {
-        const ingredientName = item.ingredient.trim()
-        if (!ingredientName || assignedStoreNameByIngredient.has(ingredientName)) {
-          return
+        const name = item.ingredient.trim()
+        if (name && !assignedStoreByIngredient.has(name)) {
+          assignedStoreByIngredient.set(name, store)
         }
-
-        assignedStoreNameByIngredient.set(ingredientName, store.storeName.trim() || '未命名商店')
       })
     })
 
+    const needsByKey = new Map<string, Map<GroupTab, GroupNeed>>()
+    nonSampleGroupIds.forEach((groupId) => {
+      const group = groupData[groupId]
+      group.ingredientRows.forEach((row) => {
+        const name = row.ingredient.trim()
+        if (!name || !row.totalQty.trim()) {
+          return
+        }
+
+        const key = `${name.toLowerCase()}|${row.totalUnit.trim().toLowerCase()}`
+        const byGroup = needsByKey.get(key) ?? new Map<GroupTab, GroupNeed>()
+        const need = byGroup.get(groupId) ?? { groupId, groupName: group.name, qty: 0, dishTitles: [] }
+        need.qty += toNumber(row.totalQty)
+        const dishTitle = group.dishes.find((dish) => dish.id === row.dishId)?.title.trim()
+        if (dishTitle && !need.dishTitles.includes(dishTitle)) {
+          need.dishTitles.push(dishTitle)
+        }
+        byGroup.set(groupId, need)
+        needsByKey.set(key, byGroup)
+      })
+    })
+
+    const grouped = new Map<string, { ingredient: string; requiredTotal: number; totalUnit: string; note: string }>()
     ingredientSummaryRows.forEach((row) => {
-      const key = `${row.ingredient}-${row.perServingUnit}-${row.totalUnit}-${row.note}`
-      const adjustment = toNumber(ingredientAdjustments[key] ?? '')
-      const finalTotal = row.sumTotalQty + adjustment
-      const groupKey = `${row.ingredient.toLowerCase()}|${row.totalUnit.trim().toLowerCase()}`
-      const existing = grouped.get(groupKey)
+      const adjustmentKey = `${row.ingredient}-${row.perServingUnit}-${row.totalUnit}-${row.note}`
+      const finalTotal = row.sumTotalQty + toNumber(ingredientAdjustments[adjustmentKey] ?? '')
+      const key = `${row.ingredient.toLowerCase()}|${row.totalUnit.trim().toLowerCase()}`
+      const existing = grouped.get(key)
 
       if (!existing) {
-        grouped.set(groupKey, {
-          ingredient: row.ingredient,
-          requiredTotal: finalTotal,
-          totalUnit: row.totalUnit.trim(),
-          requiredDisplay: '',
-          note: row.note.trim(),
-          assignedStoreName: assignedStoreNameByIngredient.get(row.ingredient) ?? null,
-        })
+        grouped.set(key, { ingredient: row.ingredient, requiredTotal: finalTotal, totalUnit: row.totalUnit.trim(), note: row.note.trim() })
         return
       }
 
@@ -1513,80 +1636,129 @@ function App() {
       if (row.note.trim()) {
         existing.note = [existing.note, row.note.trim()].filter(Boolean).join(' / ')
       }
-      if (!existing.assignedStoreName) {
-        existing.assignedStoreName = assignedStoreNameByIngredient.get(row.ingredient) ?? null
-      }
     })
 
-    return Array.from(grouped.values())
-      .map((row) => ({
-        ...row,
-        requiredDisplay: `${formatNumber(row.requiredTotal)}${row.totalUnit ? ` ${row.totalUnit}` : ''}`.trim(),
-      }))
-      .sort((a, b) => a.ingredient.localeCompare(b.ingredient, 'zh-Hant'))
-  }, [ingredientAdjustments, ingredientSummaryRows, shoppingStores])
+    return Array.from(grouped.entries())
+      .map(([key, row]) => {
+        const store = assignedStoreByIngredient.get(row.ingredient) ?? null
+        return {
+          ...row,
+          requiredDisplay: `${formatNumber(row.requiredTotal)}${row.totalUnit ? ` ${row.totalUnit}` : ''}`,
+          category: categorizeIngredient(row.ingredient),
+          groupNeeds: Array.from(needsByKey.get(key)?.values() ?? []),
+          suggestion: suggestPurchase(row.ingredient, row.requiredTotal, row.totalUnit, priceBook),
+          assignedStoreId: store?.id ?? null,
+          assignedStoreName: store ? store.storeName.trim() || '未命名商店' : null,
+        }
+      })
+      .sort(
+        (a, b) =>
+          CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category) ||
+          a.ingredient.localeCompare(b.ingredient, 'zh-Hant'),
+      )
+  }, [groupData, ingredientAdjustments, ingredientSummaryRows, nonSampleGroupIds, priceBook, shoppingStores])
 
-  const unassignedShoppingIngredientCount = useMemo(
-    () => shoppingIngredientOverviewRows.filter((row) => !row.assignedStoreName).length,
+  const overviewByIngredient = useMemo(
+    () => new Map(shoppingIngredientOverviewRows.map((row) => [row.ingredient, row])),
     [shoppingIngredientOverviewRows],
   )
+
+  const unassignedShoppingIngredientCount = shoppingIngredientOverviewRows.filter((row) => !row.assignedStoreId).length
 
   const filteredShoppingIngredientOverviewRows = useMemo(() => {
     const keyword = shoppingOverviewQuery.trim().toLowerCase()
 
     return shoppingIngredientOverviewRows.filter((row) => {
-      if (shoppingOverviewFilter === 'unassigned' && row.assignedStoreName) {
+      if (shoppingOverviewFilter === 'unassigned' && row.assignedStoreId) {
         return false
       }
 
-      if (!keyword) {
-        return true
-      }
-
-      return [row.ingredient, row.note, row.assignedStoreName ?? '']
-        .join(' ')
-        .toLowerCase()
-        .includes(keyword)
+      return (
+        !keyword ||
+        [row.ingredient, row.note, row.category, row.assignedStoreName ?? '', ...row.groupNeeds.map((need) => need.groupName)]
+          .join(' ')
+          .toLowerCase()
+          .includes(keyword)
+      )
     })
   }, [shoppingIngredientOverviewRows, shoppingOverviewFilter, shoppingOverviewQuery])
 
-  const visibleShoppingIngredientOverviewRows = useMemo(() => {
-    const shouldLimit =
-      shoppingOverviewFilter === 'unassigned' &&
-      !shoppingOverviewShowAll &&
-      shoppingOverviewQuery.trim().length === 0
-
-    return shouldLimit
-      ? filteredShoppingIngredientOverviewRows.slice(0, 5)
-      : filteredShoppingIngredientOverviewRows
-  }, [filteredShoppingIngredientOverviewRows, shoppingOverviewFilter, shoppingOverviewQuery, shoppingOverviewShowAll])
-
-  const hiddenShoppingIngredientCount = Math.max(
-    filteredShoppingIngredientOverviewRows.length - visibleShoppingIngredientOverviewRows.length,
-    0,
-  )
-
-  const canToggleShoppingOverviewShowAll =
-    shoppingOverviewFilter === 'unassigned' &&
-    shoppingOverviewQuery.trim().length === 0 &&
-    filteredShoppingIngredientOverviewRows.length > 5
-
-  const selectedShoppingOverviewCount = useMemo(
-    () => Object.values(shoppingOverviewSelectedIngredients).filter(Boolean).length,
-    [shoppingOverviewSelectedIngredients],
-  )
-
-  useEffect(() => {
-    if (shoppingStores.length === 0) {
-      setShoppingOverviewTargetStoreId(null)
-      return
+  // Cheapest estimate for an item at this particular store, after subtracting what is already at home.
+  const estimateItemAtStore = (item: ShoppingStoreItem, storeName: string) => {
+    const row = overviewByIngredient.get(item.ingredient)
+    if (!row) {
+      return null
     }
 
-    const hasSelectedStore = shoppingStores.some((store) => store.id === shoppingOverviewTargetStoreId)
-    if (!hasSelectedStore) {
-      setShoppingOverviewTargetStoreId(shoppingStores[0].id)
+    const needQty = Math.max(row.requiredTotal - toNumber(item.ownedQty ?? ''), 0)
+    if (needQty === 0) {
+      return { cost: 0, label: '家裡已有足夠數量' }
     }
-  }, [shoppingOverviewTargetStoreId, shoppingStores])
+
+    const kind = storeKindOf(storeName)
+    const best = findPriceEntries(row.ingredient, priceBook)
+      .filter((entry) => entry.store === storeName.trim() || (kind !== null && storeKindOf(entry.store) === kind))
+      .map((entry) => estimateWithEntry(needQty, row.totalUnit, entry))
+      .filter((estimate) => estimate !== null)
+      .sort((a, b) => a.cost - b.cost)[0]
+
+    if (!best) {
+      return null
+    }
+
+    const packs = best.entry.loose ? '' : ` × ${best.packs}`
+    return { cost: best.cost, label: `參考 $${best.entry.price}/${formatPack(best.entry)}${packs}` }
+  }
+
+  const getStoreStats = (store: ShoppingStore) => {
+    const items = store.items.filter((item) => item.ingredient.trim())
+    const itemSum = items.reduce((sum, item) => sum + toNumber(item.price), 0)
+    const estimated = items.reduce((sum, item) => sum + (estimateItemAtStore(item, store.storeName)?.cost ?? 0), 0)
+    const receipt = toNumber(store.receiptTotal ?? '')
+
+    return {
+      total: items.length,
+      purchased: items.filter((item) => item.purchased).length,
+      unpriced: items.filter((item) => !item.price.trim()).length,
+      itemSum,
+      estimated,
+      spent: receipt > 0 ? receipt : itemSum,
+    }
+  }
+
+  // Splits every store's spending over the groups by how much of each ingredient they asked for.
+  // Items without an actual price fall back to the estimate, reported separately.
+  const groupSpending = (() => {
+    const totals = new Map<GroupTab, { name: string; actual: number; estimated: number }>()
+    nonSampleGroupIds.forEach((groupId) =>
+      totals.set(groupId, { name: groupData[groupId].name, actual: 0, estimated: 0 }),
+    )
+
+    shoppingStores.forEach((store) => {
+      const stats = getStoreStats(store)
+      const receiptScale = toNumber(store.receiptTotal ?? '') > 0 && stats.itemSum > 0 ? stats.spent / stats.itemSum : 1
+
+      store.items.forEach((item) => {
+        const row = overviewByIngredient.get(item.ingredient)
+        const totalNeed = row?.groupNeeds.reduce((sum, need) => sum + need.qty, 0) ?? 0
+        if (!row || totalNeed === 0) {
+          return
+        }
+
+        const actual = toNumber(item.price) * receiptScale
+        const estimate = actual > 0 ? 0 : (estimateItemAtStore(item, store.storeName)?.cost ?? 0)
+        row.groupNeeds.forEach((need) => {
+          const entry = totals.get(need.groupId)
+          if (entry) {
+            entry.actual += (actual * need.qty) / totalNeed
+            entry.estimated += (estimate * need.qty) / totalNeed
+          }
+        })
+      })
+    })
+
+    return Array.from(totals.entries()).map(([groupId, value]) => ({ groupId, ...value }))
+  })()
 
   const summaryIngredientSet = useMemo(
     () => new Set(uniqueSummaryIngredients),
@@ -2530,15 +2702,12 @@ function App() {
   }, [])
 
   // --- Shopping List Functions ---
-  const addShoppingStore = () => {
-    setShoppingStores((prev) => [
-      ...prev,
-      { id: Date.now(), storeName: '新商店', items: [] },
-    ])
+  const addShoppingStore = (storeName = '新商店') => {
+    setShoppingStores((prev) => [...prev, { id: Date.now(), storeName, items: [] }])
   }
 
   const removeShoppingStore = (storeId: number) => {
-    const confirmed = window.confirm('確定要刪除此商店嗎？商店內食材會一併刪除。')
+    const confirmed = window.confirm('確定要刪除此商店嗎？商店內的食材會回到「待分配」。')
     if (!confirmed) {
       return
     }
@@ -2550,6 +2719,10 @@ function App() {
     setShoppingStores((prev) =>
       prev.map((s) => (s.id === storeId ? { ...s, storeName: newName } : s)),
     )
+  }
+
+  const updateStoreReceipt = (storeId: number, value: string) => {
+    setShoppingStores((prev) => prev.map((s) => (s.id === storeId ? { ...s, receiptTotal: value } : s)))
   }
 
   const addShoppingStoreItem = (storeId: number) => {
@@ -2564,58 +2737,67 @@ function App() {
     )
   }
 
-  const addSelectedShoppingOverviewIngredientsToStore = () => {
-    if (shoppingOverviewTargetStoreId === null) {
+  // Moves an ingredient to another store (or back to unassigned), keeping what was already entered.
+  const assignIngredientToStore = (ingredient: string, storeId: number | null) => {
+    setShoppingStores((prev) => {
+      const existing = prev.flatMap((store) => store.items).find((item) => item.ingredient === ingredient)
+      const item = existing ?? { id: Date.now(), ingredient, price: '', ownedQty: '' }
+
+      return prev.map((store) => {
+        const items = store.items.filter((entry) => entry.ingredient !== ingredient)
+        return store.id === storeId ? { ...store, items: [...items, item] } : { ...store, items }
+      })
+    })
+  }
+
+  const assignIngredientToNewStore = (ingredient: string, storeName: string) => {
+    const storeId = Date.now()
+    setShoppingStores((prev) => [
+      ...prev.map((store) => ({ ...store, items: store.items.filter((item) => item.ingredient !== ingredient) })),
+      { id: storeId, storeName, items: [{ id: storeId + 1, ingredient, price: '', ownedQty: '' }] },
+    ])
+  }
+
+  // One click: every unassigned ingredient goes to its suggested store; missing stores are created.
+  const assignAllBySuggestion = () => {
+    const unassigned = shoppingIngredientOverviewRows.filter((row) => !row.assignedStoreId)
+    if (unassigned.length === 0) {
       return
     }
 
-    const selectedIngredients = visibleShoppingIngredientOverviewRows
-      .filter((row) => shoppingOverviewSelectedIngredients[row.ingredient])
-      .map((row) => row.ingredient)
+    setShoppingStores((prev) => {
+      const stores = prev.map((store) => ({ ...store, items: [...store.items] }))
+      const seed = Date.now()
 
-    if (selectedIngredients.length === 0) {
-      return
-    }
-
-    setShoppingStores((prev) =>
-      prev.map((store) => {
-        if (store.id !== shoppingOverviewTargetStoreId) {
-          return store
+      unassigned.forEach((row, index) => {
+        const target = row.suggestion.store
+        const targetKind = storeKindOf(target)
+        let store = stores.find(
+          (entry) => entry.storeName.trim() === target || (targetKind !== null && storeKindOf(entry.storeName) === targetKind),
+        )
+        if (!store) {
+          store = { id: seed + 1000 + stores.length, storeName: target, items: [] }
+          stores.push(store)
         }
-
-        const existingIngredients = new Set(store.items.map((item) => item.ingredient.trim()).filter(Boolean))
-        const nextItems = [...store.items]
-
-        selectedIngredients.forEach((ingredient) => {
-          if (existingIngredients.has(ingredient)) {
-            return
-          }
-
-          existingIngredients.add(ingredient)
-          nextItems.push({ id: Date.now() + nextItems.length, ingredient, price: '', ownedQty: '' })
-        })
-
-        return {
-          ...store,
-          items: nextItems,
+        if (!store.items.some((item) => item.ingredient === row.ingredient)) {
+          store.items.push({ id: seed + index, ingredient: row.ingredient, price: '', ownedQty: '' })
         }
-      }),
-    )
+      })
 
-    setShoppingOverviewSelectedIngredients({})
-    setShoppingOverviewShowAll(false)
+      return stores
+    })
   }
 
   const removeShoppingStoreItem = (storeId: number, itemId: number) => {
-    const confirmed = window.confirm('確定要移除此採買食材嗎？')
-    if (!confirmed) {
+    const item = shoppingStores.find((store) => store.id === storeId)?.items.find((entry) => entry.id === itemId)
+    if (item && (item.purchased || item.price.trim()) && !window.confirm('這項已有購買紀錄，確定要移除嗎？')) {
       return
     }
 
     setShoppingStores((prev) =>
       prev.map((s) => {
         if (s.id !== storeId) return s
-        return { ...s, items: s.items.filter((item) => item.id !== itemId) }
+        return { ...s, items: s.items.filter((entry) => entry.id !== itemId) }
       }),
     )
   }
@@ -2635,6 +2817,50 @@ function App() {
         return { ...s, items: updatedItems }
       }),
     )
+  }
+
+  // Plain-text list to paste into LINE for whoever goes shopping.
+  const copyStoreList = async (store: ShoppingStore) => {
+    const lines = [`【${store.storeName.trim() || '採買清單'}】共 ${store.items.length} 項`]
+    CATEGORY_ORDER.forEach((category) => {
+      const items = store.items.filter((item) => overviewByIngredient.get(item.ingredient)?.category === category)
+      if (items.length === 0) {
+        return
+      }
+
+      lines.push('', `▍${category}`)
+      items.forEach((item) => {
+        const row = overviewByIngredient.get(item.ingredient)
+        const remaining = row ? Math.max(row.requiredTotal - toNumber(item.ownedQty ?? ''), 0) : 0
+        const amount = row ? `${formatNumber(remaining)}${row.totalUnit}` : ''
+        const note = row?.note ? `（${row.note}）` : ''
+        lines.push(`${item.purchased ? '☑' : '☐'} ${item.ingredient} ${amount}${note}`)
+      })
+    })
+
+    const text = lines.join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedStoreId(store.id)
+      window.setTimeout(() => setCopiedStoreId((current) => (current === store.id ? null : current)), 2000)
+    } catch {
+      window.prompt('複製下面的文字貼到 LINE：', text)
+    }
+  }
+
+  const addPriceEntry = () => {
+    setPriceBook((prev) => [
+      { id: Date.now(), ingredient: '', store: '全聯', price: '', packQty: '1', packUnit: '', spec: '' },
+      ...prev,
+    ])
+  }
+
+  const updatePriceEntry = (id: number, fields: Partial<PriceEntry>) => {
+    setPriceBook((prev) => prev.map((entry) => (entry.id === id ? { ...entry, ...fields } : entry)))
+  }
+
+  const removePriceEntry = (id: number) => {
+    setPriceBook((prev) => prev.filter((entry) => entry.id !== id))
   }
 
   const allAssignedIngredients = useMemo(() => {
@@ -3205,7 +3431,8 @@ function App() {
         </datalist>
 
         {isGroupTab(currentTab) && (
-          <>
+          // Keyed by group so switching groups remounts the page and no card can carry over.
+          <Fragment key={activeGroup}>
             <section className="group-header">
               <div className="group-title-row">
                 <h2 className="group-title">{getGroupName(activeGroup)}</h2>
@@ -3824,7 +4051,7 @@ function App() {
                 {invalidToolRowIds.size > 0 && <span>有 {invalidToolRowIds.size} 項工具還沒填數量，不會列入工具總表。</span>}
               </div>
             )}
-          </>
+          </Fragment>
         )}
 
         {currentTab === '食材總表' && adminUnlocked && (
@@ -4262,225 +4489,241 @@ function App() {
           </>
         )}
 
-        {currentTab === SHOPPING_LIST_TAB && adminUnlocked && (
-          <>
-            <header className="page-head page-head-row">
-              <div>
-                <h2 className="group-title">食材採買</h2>
-                <p className="muted small">
-                  先在「待分配」把食材送進商店，再到各商店清單勾選已購。有照片的食材點縮圖可放大，照著買就不會買錯。
-                </p>
-              </div>
-              <button type="button" className="btn" onClick={addShoppingStore}>
-                <Icon name="plus" size={15} />
-                新增商店
-              </button>
-            </header>
+        {currentTab === SHOPPING_LIST_TAB &&
+          adminUnlocked &&
+          (() => {
+            const storeStats = shoppingStores.map((store) => ({ store, stats: getStoreStats(store) }))
+            const assignedItemCount = storeStats.reduce((sum, { stats }) => sum + stats.total, 0)
+            const purchasedCount = storeStats.reduce((sum, { stats }) => sum + stats.purchased, 0)
+            const spentTotal = storeStats.reduce((sum, { stats }) => sum + stats.spent, 0)
+            const estimatedTotal =
+              storeStats.reduce((sum, { stats }) => sum + stats.estimated, 0) +
+              shoppingIngredientOverviewRows
+                .filter((row) => !row.assignedStoreId)
+                .reduce((sum, row) => sum + (row.suggestion.estimate?.cost ?? 0), 0)
+            const purchasedWithoutPrice = shoppingStores.reduce(
+              (sum, store) =>
+                sum +
+                (toNumber(store.receiptTotal ?? '') > 0
+                  ? 0
+                  : store.items.filter((item) => item.purchased && !item.price.trim()).length),
+              0,
+            )
+            const progress = assignedItemCount > 0 ? Math.round((purchasedCount / assignedItemCount) * 100) : 0
 
-            <section className="card">
-              <header className="card-head">
-                {renderCollapseButton(
-                  !shoppingOverviewExpanded,
-                  () => setShoppingOverviewExpanded((previous) => !previous),
-                  '待分配食材',
-                )}
-                <h3 className="card-title">待分配食材</h3>
-                <div className="dish-meta">
-                  <span className="chip">共 {shoppingIngredientOverviewRows.length} 項</span>
-                  {unassignedShoppingIngredientCount > 0 ? (
-                    <span className="chip chip-warn">未分配 {unassignedShoppingIngredientCount}</span>
-                  ) : (
-                    shoppingIngredientOverviewRows.length > 0 && <span className="chip chip-ok">全部已分配</span>
-                  )}
+            return (
+              <>
+                <header className="page-head">
+                  <h2 className="group-title">食材採買</h2>
+                  <p className="muted small">
+                    ① 分配每樣食材去哪買 → ② 到店打開「採買模式」用手機邊買邊勾、順手記金額 → ③ 填收據總額，自動算出花費和各組分攤。
+                  </p>
+                </header>
+
+                <div className="kpi-grid">
+                  <div className="kpi">
+                    <span className="kpi-label">需採買</span>
+                    <strong className="kpi-value">{shoppingIngredientOverviewRows.length}</strong>
+                    <span className="kpi-sub">項食材</span>
+                  </div>
+                  <div className={`kpi ${unassignedShoppingIngredientCount > 0 ? 'is-warn' : 'is-ok'}`}>
+                    <span className="kpi-label">待分配</span>
+                    <strong className="kpi-value">{unassignedShoppingIngredientCount}</strong>
+                    <span className="kpi-sub">
+                      {unassignedShoppingIngredientCount > 0 ? '項還沒決定去哪買' : '全部都已分配'}
+                    </span>
+                  </div>
+                  <div className="kpi">
+                    <span className="kpi-label">採買進度</span>
+                    <strong className="kpi-value">
+                      {purchasedCount}
+                      <span className="kpi-of">/{assignedItemCount}</span>
+                    </strong>
+                    <span className="kpi-bar" aria-hidden="true">
+                      <span style={{ width: `${progress}%` }} />
+                    </span>
+                  </div>
+                  <div className="kpi">
+                    <span className="kpi-label">預估花費</span>
+                    <strong className="kpi-value">{formatMoney(estimatedTotal)}</strong>
+                    <span className="kpi-sub">依價格參考估算</span>
+                  </div>
+                  <div className="kpi kpi-accent">
+                    <span className="kpi-label">實際花費</span>
+                    <strong className="kpi-value">{formatMoney(spentTotal)}</strong>
+                    <span className="kpi-sub">
+                      {purchasedWithoutPrice > 0 ? `${purchasedWithoutPrice} 項已買但沒填金額` : '依實付金額／收據'}
+                    </span>
+                  </div>
                 </div>
-              </header>
 
-              {shoppingOverviewExpanded && (
-                <div className="card-body">
-                  <div className="toolbar">
-                    <div className="segmented" role="group" aria-label="摘要篩選">
+                <section className="card">
+                  <header className="card-head">
+                    {renderCollapseButton(
+                      !shoppingOverviewExpanded,
+                      () => setShoppingOverviewExpanded((previous) => !previous),
+                      '分配採買地點',
+                    )}
+                    <span className="step-no">1</span>
+                    <h3 className="card-title">分配採買地點</h3>
+                    <div className="dish-meta">
+                      {unassignedShoppingIngredientCount > 0 ? (
+                        <span className="chip chip-warn">待分配 {unassignedShoppingIngredientCount}</span>
+                      ) : (
+                        shoppingIngredientOverviewRows.length > 0 && <span className="chip chip-ok">全部已分配</span>
+                      )}
                       <button
                         type="button"
-                        className={shoppingOverviewFilter === 'unassigned' ? 'is-active' : ''}
-                        onClick={() => {
-                          setShoppingOverviewFilter('unassigned')
-                          setShoppingOverviewShowAll(false)
-                        }}
+                        className="btn btn-sm"
+                        onClick={assignAllBySuggestion}
+                        disabled={unassignedShoppingIngredientCount === 0}
                       >
-                        只看未分配
-                      </button>
-                      <button
-                        type="button"
-                        className={shoppingOverviewFilter === 'all' ? 'is-active' : ''}
-                        onClick={() => {
-                          setShoppingOverviewFilter('all')
-                          setShoppingOverviewShowAll(true)
-                        }}
-                      >
-                        顯示全部
+                        全部依建議分配
                       </button>
                     </div>
-                    <input
-                      className="input input-sm toolbar-search"
-                      value={shoppingOverviewQuery}
-                      onChange={(event) => setShoppingOverviewQuery(event.target.value)}
-                      placeholder="搜尋食材 / 備註 / 商店"
-                    />
-                  </div>
+                  </header>
 
-                  {shoppingOverviewFilter === 'unassigned' ? (
-                    <>
-                      {visibleShoppingIngredientOverviewRows.length === 0 ? (
-                        <p className="empty">目前沒有符合條件的未分配食材。</p>
+                  {shoppingOverviewExpanded && (
+                    <div className="card-body">
+                      <div className="toolbar">
+                        <div className="segmented" role="group" aria-label="篩選">
+                          <button
+                            type="button"
+                            className={shoppingOverviewFilter === 'unassigned' ? 'is-active' : ''}
+                            onClick={() => setShoppingOverviewFilter('unassigned')}
+                          >
+                            只看待分配
+                          </button>
+                          <button
+                            type="button"
+                            className={shoppingOverviewFilter === 'all' ? 'is-active' : ''}
+                            onClick={() => setShoppingOverviewFilter('all')}
+                          >
+                            全部食材
+                          </button>
+                        </div>
+                        <input
+                          className="input input-sm toolbar-search"
+                          value={shoppingOverviewQuery}
+                          onChange={(event) => setShoppingOverviewQuery(event.target.value)}
+                          placeholder="搜尋食材、分類、組別或商店"
+                        />
+                      </div>
+                      <p className="muted small">
+                        「建議」依價格參考算出最省的地方，沒有參考價時依分類：生鮮→菜市場、包裝與調味→全聯。可直接用右邊選單更改。
+                      </p>
+
+                      {filteredShoppingIngredientOverviewRows.length === 0 ? (
+                        <p className="empty">
+                          {shoppingOverviewFilter === 'unassigned' && shoppingIngredientOverviewRows.length > 0
+                            ? '全部食材都已分配好了，往下看各商店清單。'
+                            : '目前沒有符合條件的食材。'}
+                        </p>
                       ) : (
-                        <div className="pick-grid">
-                          {visibleShoppingIngredientOverviewRows.map((row) => (
-                            <label key={`${row.ingredient}-${row.totalUnit}`} className="pick-item">
-                              <input
-                                type="checkbox"
-                                className="checkbox"
-                                checked={Boolean(shoppingOverviewSelectedIngredients[row.ingredient])}
-                                onChange={(event) =>
-                                  setShoppingOverviewSelectedIngredients((previous) => ({
-                                    ...previous,
-                                    [row.ingredient]: event.target.checked,
-                                  }))
-                                }
-                              />
-                              {renderReferenceThumb(row.ingredient, 'md') ?? (
-                                <span className="ref-thumb ref-thumb-md is-empty" aria-hidden="true" />
-                              )}
-                              <span className="pick-body">
-                                <span className="pick-name">{row.ingredient}</span>
-                                {row.note && <span className="pick-note">{row.note}</span>}
-                              </span>
-                              <span className="pick-qty">{row.requiredDisplay}</span>
-                            </label>
-                          ))}
+                        <div className="assign-list">
+                          {CATEGORY_ORDER.map((category) => {
+                            const rows = filteredShoppingIngredientOverviewRows.filter((row) => row.category === category)
+                            if (rows.length === 0) {
+                              return null
+                            }
+
+                            return (
+                              <div key={category} className="assign-group">
+                                <p className="assign-group-title">
+                                  {category} <span className="muted">{rows.length}</span>
+                                </p>
+                                {rows.map((row) => (
+                                  <div key={`${row.ingredient}-${row.totalUnit}`} className="assign-row">
+                                    <span className="assign-photo">
+                                      {renderReferenceThumb(row.ingredient, 'md') ?? (
+                                        <span className="ref-thumb ref-thumb-md is-empty" aria-hidden="true" />
+                                      )}
+                                    </span>
+                                    <div className="assign-main">
+                                      <span className="assign-name">
+                                        {row.ingredient}
+                                        <span className="assign-qty">{row.requiredDisplay}</span>
+                                      </span>
+                                      <span className="assign-meta">
+                                        {row.groupNeeds
+                                          .map((need) => `${need.groupName} ${formatNumber(need.qty)}${row.totalUnit}`)
+                                          .join('、')}
+                                        {row.note && ` · ${row.note}`}
+                                      </span>
+                                    </div>
+                                    <div className="assign-suggest">
+                                      <span className="suggest-store">建議 {row.suggestion.store}</span>
+                                      <span className="suggest-cost">
+                                        {row.suggestion.estimate
+                                          ? `約 ${formatMoney(row.suggestion.estimate.cost)}`
+                                          : row.suggestion.reason === 'category'
+                                            ? '依分類'
+                                            : '單位不同，無法估價'}
+                                      </span>
+                                    </div>
+                                    <select
+                                      className={`input input-sm assign-select ${row.assignedStoreId ? '' : 'is-missing'}`}
+                                      aria-label={`${row.ingredient} 去哪買`}
+                                      value={row.assignedStoreId ?? ''}
+                                      onChange={(event) => {
+                                        const value = event.target.value
+                                        if (value.startsWith('new:')) {
+                                          assignIngredientToNewStore(row.ingredient, value.slice(4))
+                                        } else {
+                                          assignIngredientToStore(row.ingredient, value ? Number(value) : null)
+                                        }
+                                      }}
+                                    >
+                                      <option value="">尚未分配</option>
+                                      {shoppingStores.map((store) => (
+                                        <option key={store.id} value={store.id}>
+                                          {store.storeName.trim() || '未命名商店'}
+                                        </option>
+                                      ))}
+                                      {STORE_KINDS.filter(
+                                        (kind) => !shoppingStores.some((store) => storeKindOf(store.storeName) === kind),
+                                      ).map((kind) => (
+                                        <option key={kind} value={`new:${kind}`}>
+                                          ＋ 新增「{kind}」
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                ))}
+                              </div>
+                            )
+                          })}
                         </div>
                       )}
-
-                      {canToggleShoppingOverviewShowAll && (
-                        <button
-                          type="button"
-                          className="btn-add-row"
-                          onClick={() => setShoppingOverviewShowAll((previous) => !previous)}
-                        >
-                          {shoppingOverviewShowAll
-                            ? '只看前 5 項'
-                            : `再顯示 ${hiddenShoppingIngredientCount} 項未分配食材`}
-                        </button>
-                      )}
-
-                      <div className="assign-bar">
-                        <span className="assign-count">
-                          已勾選 <strong>{selectedShoppingOverviewCount}</strong> 項
-                        </span>
-                        <button
-                          type="button"
-                          className="btn-link"
-                          onClick={() =>
-                            setShoppingOverviewSelectedIngredients((previous) => ({
-                              ...previous,
-                              ...Object.fromEntries(
-                                visibleShoppingIngredientOverviewRows.map((row) => [row.ingredient, true]),
-                              ),
-                            }))
-                          }
-                          disabled={visibleShoppingIngredientOverviewRows.length === 0}
-                        >
-                          全選
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-link"
-                          onClick={() => setShoppingOverviewSelectedIngredients({})}
-                          disabled={selectedShoppingOverviewCount === 0}
-                        >
-                          清除
-                        </button>
-                        <span className="assign-spacer" />
-                        <select
-                          className="input input-sm"
-                          aria-label="送進哪一間商店"
-                          value={shoppingOverviewTargetStoreId ?? ''}
-                          onChange={(event) => setShoppingOverviewTargetStoreId(Number(event.target.value) || null)}
-                          disabled={shoppingStores.length === 0}
-                        >
-                          {shoppingStores.length === 0 ? (
-                            <option value="">請先新增商店</option>
-                          ) : (
-                            shoppingStores.map((store) => (
-                              <option key={store.id} value={store.id}>
-                                送到：{store.storeName || '未命名商店'}
-                              </option>
-                            ))
-                          )}
-                        </select>
-                        <button
-                          type="button"
-                          className="btn btn-sm"
-                          onClick={addSelectedShoppingOverviewIngredientsToStore}
-                          disabled={selectedShoppingOverviewCount === 0 || shoppingOverviewTargetStoreId === null}
-                        >
-                          送進商店
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="table-scroll table-scroll-limited">
-                      <table className="data-table">
-                        <thead>
-                          <tr>
-                            <th>食材</th>
-                            <th className="num">需求總量</th>
-                            <th>備註</th>
-                            <th>已分配商店</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {filteredShoppingIngredientOverviewRows.length === 0 && (
-                            <tr>
-                              <td colSpan={4} className="empty">
-                                目前沒有符合條件的食材摘要
-                              </td>
-                            </tr>
-                          )}
-                          {filteredShoppingIngredientOverviewRows.map((row) => (
-                            <tr key={`${row.ingredient}-${row.totalUnit}`}>
-                              <td className="strong">
-                                <span className="name-with-thumb">
-                                  {renderReferenceThumb(row.ingredient)}
-                                  {row.ingredient}
-                                </span>
-                              </td>
-                              <td className="num">{row.requiredDisplay}</td>
-                              <td className="muted">{row.note}</td>
-                              <td>{row.assignedStoreName ?? <span className="chip chip-warn">尚未分配</span>}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
                     </div>
                   )}
+                </section>
+
+                <div className="section-title-row">
+                  <h3 className="section-title">
+                    <span className="step-no">2</span>
+                    各商店採買清單
+                  </h3>
+                  <div className="store-add">
+                    {STORE_KINDS.map((kind) => (
+                      <button key={kind} type="button" className="btn btn-ghost btn-sm" onClick={() => addShoppingStore(kind)}>
+                        <Icon name="plus" size={14} />
+                        {kind}
+                      </button>
+                    ))}
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => addShoppingStore()}>
+                      <Icon name="plus" size={14} />
+                      其他商店
+                    </button>
+                  </div>
                 </div>
-              )}
-            </section>
 
-            {shoppingStores.length === 0 ? (
-              <p className="empty">目前沒有商店，請點擊上方「新增商店」。</p>
-            ) : (
-              shoppingStores.map((store) => {
-                const storeTotal = store.items.reduce((sum, item) => {
-                  if (!summaryIngredientSet.has(item.ingredient)) {
-                    return sum
-                  }
-                  return sum + toNumber(item.price)
-                }, 0)
-                const purchasedCount = store.items.filter((item) => item.purchased).length
+                {shoppingStores.length === 0 && (
+                  <p className="empty">還沒有商店。按上方「全部依建議分配」會自動建立，或用右上角按鈕新增。</p>
+                )}
 
-                return (
-                  <section key={store.id} className="card">
+                {storeStats.map(({ store, stats }) => (
+                  <section key={store.id} className="card store-card">
                     <header className="card-head">
                       <span className="store-icon" aria-hidden="true">
                         <Icon name="cart" size={16} />
@@ -4493,133 +4736,186 @@ function App() {
                         placeholder="商店名稱"
                         aria-label="商店名稱"
                       />
-                      <span className={`chip ${store.items.length > 0 && purchasedCount === store.items.length ? 'chip-ok' : ''}`}>
-                        已購 {purchasedCount}/{store.items.length}
+                      <span className={`chip ${stats.total > 0 && stats.purchased === stats.total ? 'chip-ok' : ''}`}>
+                        已買 {stats.purchased}/{stats.total}
                       </span>
-                      <span className="store-total">
-                        <span className="muted small">合計</span>
-                        <strong>{formatNumber(storeTotal)}</strong>
-                      </span>
-                      <button
-                        type="button"
-                        className="icon-btn icon-btn-danger"
-                        onClick={() => removeShoppingStore(store.id)}
-                        aria-label="刪除商店"
-                        title="刪除商店"
-                      >
-                        <Icon name="trash" />
-                      </button>
+                      <div className="store-head-actions">
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => setShoppingModeStoreId(store.id)}
+                          disabled={stats.total === 0}
+                        >
+                          <Icon name="cart" size={14} />
+                          採買模式
+                        </button>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyStoreList(store)}>
+                          <Icon name={copiedStoreId === store.id ? 'check' : 'copy'} size={14} />
+                          {copiedStoreId === store.id ? '已複製' : '複製清單'}
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn icon-btn-danger"
+                          onClick={() => removeShoppingStore(store.id)}
+                          aria-label="刪除商店"
+                          title="刪除商店"
+                        >
+                          <Icon name="trash" />
+                        </button>
+                      </div>
                     </header>
+
+                    <div className="store-summary">
+                      <span>
+                        預估 <strong>{formatMoney(stats.estimated)}</strong>
+                      </span>
+                      <span>
+                        品項加總 <strong>{formatMoney(stats.itemSum)}</strong>
+                      </span>
+                      <label className="receipt-field">
+                        收據總額
+                        <input
+                          className="input input-sm"
+                          type="number"
+                          min="0"
+                          inputMode="numeric"
+                          placeholder="結帳後填"
+                          value={store.receiptTotal ?? ''}
+                          onChange={(event) => updateStoreReceipt(store.id, event.target.value)}
+                        />
+                      </label>
+                      <span className="store-spent">
+                        實際花費 <strong>{formatMoney(stats.spent)}</strong>
+                      </span>
+                    </div>
 
                     <div className="shop-list" role="list">
                       {store.items.length > 0 && (
                         <div className="shop-row shop-row-head" aria-hidden="true">
-                          <span>已購</span>
+                          <span>已買</span>
                           <span>照片</span>
                           <span>食材</span>
                           <span className="num">需求</span>
                           <span className="num">家中已有</span>
                           <span className="num">還要買</span>
-                          <span className="num">金額</span>
+                          <span className="num">實付</span>
                           <span />
                         </div>
                       )}
-                      {store.items.length === 0 && <p className="empty">尚未加入食材</p>}
-                      {store.items.map((item) => {
-                        const selectedRequirement = shoppingIngredientOverviewRows.find(
-                          (row) => row.ingredient === item.ingredient,
+                      {store.items.length === 0 && <p className="empty">尚未加入食材，請在上方「分配採買地點」選擇這間店。</p>}
+                      {[...CATEGORY_ORDER, ''].map((category) => {
+                        const items = store.items.filter((item) =>
+                          category ? overviewByIngredient.get(item.ingredient)?.category === category : !overviewByIngredient.has(item.ingredient),
                         )
-                        const ownedQty = toNumber(item.ownedQty ?? '')
-                        const remainingQty = Math.max((selectedRequirement?.requiredTotal ?? 0) - ownedQty, 0)
+                        if (items.length === 0) {
+                          return null
+                        }
 
                         return (
-                          <div key={item.id} role="listitem" className={`shop-row ${item.purchased ? 'is-done' : ''}`}>
-                            <input
-                              type="checkbox"
-                              className="checkbox shop-check"
-                              checked={Boolean(item.purchased)}
-                              onChange={(event) =>
-                                updateShoppingStoreItem(store.id, item.id, 'purchased', event.target.checked)
-                              }
-                              aria-label={`標記 ${item.ingredient || '食材'} 是否已購`}
-                            />
-                            <span className="shop-photo">
-                              {renderReferenceThumb(item.ingredient, 'md') ?? (
-                                <span className="ref-thumb ref-thumb-md is-empty" aria-hidden="true" />
-                              )}
-                            </span>
-                            <div className="shop-name">
-                              <select
-                                className="cell-input"
-                                value={item.ingredient}
-                                aria-label="食材"
-                                onChange={(event) => {
-                                  updateShoppingStoreItem(store.id, item.id, 'ingredient', event.target.value)
-                                  updateShoppingStoreItem(store.id, item.id, 'ownedQty', '')
-                                }}
-                              >
-                                <option value="">選擇食材</option>
-                                {uniqueSummaryIngredients.map((name) => {
-                                  const isAssigned = allAssignedIngredients.has(name) && item.ingredient !== name
-                                  return (
-                                    <option key={name} value={name} disabled={isAssigned}>
-                                      {name}
-                                      {isAssigned ? '（已排定）' : ''}
-                                    </option>
-                                  )
-                                })}
-                              </select>
-                              {selectedRequirement?.note && <span className="shop-note">{selectedRequirement.note}</span>}
-                            </div>
-                            <span className="shop-need num" data-label="需求">
-                              {selectedRequirement?.requiredDisplay ?? '–'}
-                            </span>
-                            <span className="shop-owned" data-label="家中已有">
-                              <input
-                                type="number"
-                                min="0"
-                                inputMode="decimal"
-                                className="cell-input cell-input-num"
-                                value={item.ownedQty ?? ''}
-                                onChange={(event) =>
-                                  updateShoppingStoreItem(store.id, item.id, 'ownedQty', event.target.value)
-                                }
-                                placeholder="0"
-                                aria-label="家中已有"
-                                disabled={!selectedRequirement}
-                              />
-                            </span>
-                            <span className="shop-remaining num" data-label="還要買">
-                              {selectedRequirement ? (
-                                <>
-                                  <strong>{formatNumber(remainingQty)}</strong> {selectedRequirement.totalUnit}
-                                </>
-                              ) : (
-                                '–'
-                              )}
-                            </span>
-                            <span className="shop-price" data-label="金額">
-                              <input
-                                type="number"
-                                min="0"
-                                inputMode="numeric"
-                                className="cell-input cell-input-num"
-                                value={item.price}
-                                onChange={(event) => updateShoppingStoreItem(store.id, item.id, 'price', event.target.value)}
-                                placeholder="0"
-                                aria-label="採買金額"
-                              />
-                            </span>
-                            <button
-                              type="button"
-                              className="icon-btn icon-btn-danger shop-remove"
-                              onClick={() => removeShoppingStoreItem(store.id, item.id)}
-                              aria-label="移除採買食材"
-                              title="移除"
-                            >
-                              <Icon name="close" size={14} />
-                            </button>
-                          </div>
+                          <Fragment key={category || 'unmatched'}>
+                            <p className="shop-category">{category || '未對應到食材總表'}</p>
+                            {items.map((item) => {
+                              const row = overviewByIngredient.get(item.ingredient)
+                              const remainingQty = Math.max((row?.requiredTotal ?? 0) - toNumber(item.ownedQty ?? ''), 0)
+                              const estimate = estimateItemAtStore(item, store.storeName)
+
+                              return (
+                                <div key={item.id} role="listitem" className={`shop-row ${item.purchased ? 'is-done' : ''}`}>
+                                  <input
+                                    type="checkbox"
+                                    className="checkbox shop-check"
+                                    checked={Boolean(item.purchased)}
+                                    onChange={(event) =>
+                                      updateShoppingStoreItem(store.id, item.id, 'purchased', event.target.checked)
+                                    }
+                                    aria-label={`標記 ${item.ingredient || '食材'} 是否已買`}
+                                  />
+                                  <span className="shop-photo">
+                                    {renderReferenceThumb(item.ingredient, 'md') ?? (
+                                      <span className="ref-thumb ref-thumb-md is-empty" aria-hidden="true" />
+                                    )}
+                                  </span>
+                                  <div className="shop-name">
+                                    {item.ingredient ? (
+                                      <span className="shop-name-text">{item.ingredient}</span>
+                                    ) : (
+                                      <select
+                                        className="cell-input"
+                                        value=""
+                                        aria-label="選擇食材"
+                                        onChange={(event) =>
+                                          updateShoppingStoreItem(store.id, item.id, 'ingredient', event.target.value)
+                                        }
+                                      >
+                                        <option value="">選擇食材</option>
+                                        {uniqueSummaryIngredients.map((name) => (
+                                          <option key={name} value={name} disabled={allAssignedIngredients.has(name)}>
+                                            {name}
+                                            {allAssignedIngredients.has(name) ? '（已排定）' : ''}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    )}
+                                    {row && (
+                                      <span className="shop-note">
+                                        {row.groupNeeds.map((need) => need.groupName).join('、')}
+                                        {row.note && ` · ${row.note}`}
+                                      </span>
+                                    )}
+                                    {estimate && <span className="shop-estimate">{estimate.label}</span>}
+                                  </div>
+                                  <span className="shop-need num" data-label="需求">
+                                    {row?.requiredDisplay ?? '–'}
+                                  </span>
+                                  <span className="shop-owned" data-label="家中已有">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      inputMode="decimal"
+                                      className="cell-input cell-input-num"
+                                      value={item.ownedQty ?? ''}
+                                      onChange={(event) =>
+                                        updateShoppingStoreItem(store.id, item.id, 'ownedQty', event.target.value)
+                                      }
+                                      placeholder="0"
+                                      aria-label="家中已有"
+                                      disabled={!row}
+                                    />
+                                  </span>
+                                  <span className="shop-remaining num" data-label="還要買">
+                                    {row ? (
+                                      <>
+                                        <strong>{formatNumber(remainingQty)}</strong> {row.totalUnit}
+                                      </>
+                                    ) : (
+                                      '–'
+                                    )}
+                                  </span>
+                                  <span className="shop-price" data-label="實付">
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      inputMode="numeric"
+                                      className="cell-input cell-input-num"
+                                      value={item.price}
+                                      onChange={(event) => updateShoppingStoreItem(store.id, item.id, 'price', event.target.value)}
+                                      placeholder={estimate ? `約${estimate.cost}` : '0'}
+                                      aria-label="實付金額"
+                                    />
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="icon-btn icon-btn-danger shop-remove"
+                                    onClick={() => removeShoppingStoreItem(store.id, item.id)}
+                                    aria-label="移除（回到待分配）"
+                                    title="移除（回到待分配）"
+                                  >
+                                    <Icon name="close" size={14} />
+                                  </button>
+                                </div>
+                              )
+                            })}
+                          </Fragment>
                         )
                       })}
                     </div>
@@ -4629,12 +4925,237 @@ function App() {
                       onClick={() => addShoppingStoreItem(store.id)}
                     >
                       <Icon name="plus" size={14} />
-                      新增食材
+                      手動加一項
                     </button>
                   </section>
-                )
-              })
-            )}
+                ))}
+
+                <section className="card">
+                  <header className="card-head">
+                    <span className="step-no">3</span>
+                    <h3 className="card-title">花費總覽</h3>
+                    <span className="muted small">實際花費以收據總額為準，沒填收據就用各品項實付加總。</span>
+                  </header>
+                  <div className="spend-grid">
+                    <div className="table-scroll">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>商店</th>
+                            <th className="num">進度</th>
+                            <th className="num">預估</th>
+                            <th className="num">實際</th>
+                            <th className="num">差額</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {storeStats.length === 0 && (
+                            <tr>
+                              <td colSpan={5} className="empty">
+                                尚無商店
+                              </td>
+                            </tr>
+                          )}
+                          {storeStats.map(({ store, stats }) => (
+                            <tr key={store.id}>
+                              <td className="strong">{store.storeName.trim() || '未命名商店'}</td>
+                              <td className="num">
+                                {stats.purchased}/{stats.total}
+                              </td>
+                              <td className="num">{formatMoney(stats.estimated)}</td>
+                              <td className="num strong">{formatMoney(stats.spent)}</td>
+                              <td className={`num ${stats.spent > stats.estimated ? 'text-danger' : 'text-ok'}`}>
+                                {stats.spent > 0 ? formatMoney(stats.spent - stats.estimated) : '–'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        {storeStats.length > 0 && (
+                          <tfoot>
+                            <tr>
+                              <td className="strong">合計</td>
+                              <td className="num">
+                                {purchasedCount}/{assignedItemCount}
+                              </td>
+                              <td className="num">{formatMoney(estimatedTotal)}</td>
+                              <td className="num strong">{formatMoney(spentTotal)}</td>
+                              <td />
+                            </tr>
+                          </tfoot>
+                        )}
+                      </table>
+                    </div>
+                    <div className="table-scroll">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>各組分攤</th>
+                            <th className="num">已花</th>
+                            <th className="num">待買（預估）</th>
+                            <th className="num">合計</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {groupSpending.map((entry) => (
+                            <tr key={entry.groupId}>
+                              <td className="strong">{entry.name}</td>
+                              <td className="num">{formatMoney(entry.actual)}</td>
+                              <td className="num muted">{formatMoney(entry.estimated)}</td>
+                              <td className="num strong">{formatMoney(entry.actual + entry.estimated)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                  <p className="muted small spend-note">
+                    各組分攤依該組填寫的用量比例計算；填了收據總額時，會依收據金額等比例調整。
+                  </p>
+                </section>
+              </>
+            )
+          })()}
+
+        {currentTab === PRICE_TAB && adminUnlocked && (
+          <>
+            <header className="page-head page-head-row">
+              <div>
+                <h2 className="group-title">價格參考</h2>
+                <p className="muted small">
+                  用來建議去哪買、估算預算。初始資料是 {PRICE_REFERENCE_UPDATED} 依公開報導與一般行情整理的估價，請依實際購買價隨時修正；
+                  「秤重」代表依重量計價（例如菜市場每斤），不用整包購買。
+                </p>
+              </div>
+              <button type="button" className="btn" onClick={addPriceEntry}>
+                <Icon name="plus" size={15} />
+                新增價格
+              </button>
+            </header>
+            <datalist id="store-kind-options">
+              {STORE_KINDS.map((kind) => (
+                <option key={kind} value={kind} />
+              ))}
+            </datalist>
+            <section className="card">
+              <header className="card-head">
+                <input
+                  className="input input-sm toolbar-search"
+                  value={priceQuery}
+                  onChange={(event) => setPriceQuery(event.target.value)}
+                  placeholder="搜尋食材或商店"
+                  aria-label="搜尋價格"
+                />
+                <span className="muted small">共 {priceBook.length} 筆</span>
+              </header>
+              <div className="table-scroll">
+                <table className="data-table price-table">
+                  <thead>
+                    <tr>
+                      <th>食材</th>
+                      <th>商店</th>
+                      <th className="num">價格</th>
+                      <th className="num">包裝數量</th>
+                      <th>單位</th>
+                      <th className="col-check">秤重</th>
+                      <th>規格說明</th>
+                      <th aria-label="操作" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {priceBook
+                      .filter((entry) => {
+                        const keyword = priceQuery.trim().toLowerCase()
+                        return !keyword || `${entry.ingredient} ${entry.store} ${entry.spec}`.toLowerCase().includes(keyword)
+                      })
+                      .map((entry) => (
+                        <tr key={entry.id}>
+                          <td>
+                            <input
+                              className="cell-input"
+                              value={entry.ingredient}
+                              onChange={(event) => updatePriceEntry(entry.id, { ingredient: event.target.value })}
+                              placeholder="食材"
+                              aria-label="食材"
+                              list="ingredient-library-options"
+                            />
+                          </td>
+                          <td>
+                            <input
+                              className="cell-input"
+                              value={entry.store}
+                              onChange={(event) => updatePriceEntry(entry.id, { store: event.target.value })}
+                              placeholder="商店"
+                              aria-label="商店"
+                              list="store-kind-options"
+                            />
+                          </td>
+                          <td className="num">
+                            <input
+                              className="cell-input cell-input-num"
+                              type="number"
+                              min="0"
+                              inputMode="numeric"
+                              value={entry.price}
+                              onChange={(event) => updatePriceEntry(entry.id, { price: event.target.value })}
+                              aria-label="價格"
+                            />
+                          </td>
+                          <td className="num">
+                            <input
+                              className="cell-input cell-input-num"
+                              type="number"
+                              min="0"
+                              inputMode="decimal"
+                              value={entry.packQty}
+                              onChange={(event) => updatePriceEntry(entry.id, { packQty: event.target.value })}
+                              aria-label="包裝數量"
+                            />
+                          </td>
+                          <td>
+                            <input
+                              className="cell-input cell-input-unit"
+                              value={entry.packUnit}
+                              onChange={(event) => updatePriceEntry(entry.id, { packUnit: event.target.value })}
+                              placeholder="顆／g／斤"
+                              aria-label="單位"
+                            />
+                          </td>
+                          <td className="col-check">
+                            <input
+                              type="checkbox"
+                              className="checkbox"
+                              checked={Boolean(entry.loose)}
+                              onChange={(event) =>
+                                updatePriceEntry(entry.id, event.target.checked ? { loose: true } : { loose: undefined })
+                              }
+                              aria-label="秤重計價"
+                            />
+                          </td>
+                          <td>
+                            <input
+                              className="cell-input"
+                              value={entry.spec}
+                              onChange={(event) => updatePriceEntry(entry.id, { spec: event.target.value })}
+                              placeholder="規格、品牌"
+                              aria-label="規格說明"
+                            />
+                          </td>
+                          <td className="cell-action">
+                            <button
+                              type="button"
+                              className="icon-btn icon-btn-danger"
+                              onClick={() => removePriceEntry(entry.id)}
+                              aria-label="刪除這筆價格"
+                            >
+                              <Icon name="close" size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </>
         )}
 
@@ -4722,6 +5243,134 @@ function App() {
           </section>
         )}
       </main>
+
+      {adminUnlocked &&
+        shoppingModeStoreId !== null &&
+        (() => {
+          const store = shoppingStores.find((entry) => entry.id === shoppingModeStoreId)
+          if (!store) {
+            return null
+          }
+
+          const stats = getStoreStats(store)
+          const items = store.items.filter((item) => item.ingredient.trim() && !(shoppingModeHideDone && item.purchased))
+          const progress = stats.total > 0 ? Math.round((stats.purchased / stats.total) * 100) : 0
+
+          return (
+            <div className="shop-mode" role="dialog" aria-modal="true" aria-label={`${store.storeName} 採買模式`}>
+              <header className="shop-mode-head">
+                <button type="button" className="icon-btn" onClick={() => setShoppingModeStoreId(null)} aria-label="離開採買模式">
+                  <Icon name="close" size={20} />
+                </button>
+                <div className="shop-mode-title">
+                  <strong>{store.storeName.trim() || '採買清單'}</strong>
+                  <span>
+                    已買 {stats.purchased} / {stats.total}
+                  </span>
+                </div>
+                <label className="shop-mode-toggle">
+                  <input
+                    type="checkbox"
+                    className="checkbox"
+                    checked={shoppingModeHideDone}
+                    onChange={(event) => setShoppingModeHideDone(event.target.checked)}
+                  />
+                  隱藏已買
+                </label>
+              </header>
+              <div className="shop-mode-progress" aria-hidden="true">
+                <span style={{ width: `${progress}%` }} />
+              </div>
+
+              <div className="shop-mode-body">
+                {CATEGORY_ORDER.map((category) => {
+                  const categoryItems = items.filter((item) => overviewByIngredient.get(item.ingredient)?.category === category)
+                  if (categoryItems.length === 0) {
+                    return null
+                  }
+
+                  return (
+                    <section key={category} className="shop-mode-section">
+                      <h4>{category}</h4>
+                      {categoryItems.map((item) => {
+                        const row = overviewByIngredient.get(item.ingredient)
+                        const remaining = Math.max((row?.requiredTotal ?? 0) - toNumber(item.ownedQty ?? ''), 0)
+                        const estimate = estimateItemAtStore(item, store.storeName)
+                        const toggle = () => updateShoppingStoreItem(store.id, item.id, 'purchased', !item.purchased)
+
+                        return (
+                          <div key={item.id} className={`shop-mode-item ${item.purchased ? 'is-done' : ''}`}>
+                            <button
+                              type="button"
+                              className="shop-mode-check"
+                              onClick={toggle}
+                              aria-pressed={Boolean(item.purchased)}
+                              aria-label={`${item.ingredient} ${item.purchased ? '已買' : '未買'}`}
+                            >
+                              <span className="shop-mode-box">{item.purchased && <Icon name="check" size={18} />}</span>
+                            </button>
+                            {renderReferenceThumb(item.ingredient, 'md') ?? (
+                              <span className="ref-thumb ref-thumb-md is-empty" aria-hidden="true" />
+                            )}
+                            <button type="button" className="shop-mode-info" onClick={toggle}>
+                              <span className="shop-mode-name">{item.ingredient}</span>
+                              <span className="shop-mode-qty">
+                                買 <strong>{formatNumber(remaining)}</strong> {row?.totalUnit}
+                              </span>
+                              {Boolean(row?.note || row?.groupNeeds.length) && (
+                                <span className="shop-mode-note">
+                                  {[row?.note, row?.groupNeeds.map((need) => need.groupName).join('、')].filter(Boolean).join(' · ')}
+                                </span>
+                              )}
+                            </button>
+                            <label className="shop-mode-price">
+                              <span>實付</span>
+                              <input
+                                type="number"
+                                min="0"
+                                inputMode="numeric"
+                                className="input input-sm"
+                                value={item.price}
+                                onChange={(event) => updateShoppingStoreItem(store.id, item.id, 'price', event.target.value)}
+                                placeholder={estimate ? `約${estimate.cost}` : '$'}
+                              />
+                            </label>
+                          </div>
+                        )
+                      })}
+                    </section>
+                  )
+                })}
+                {items.length === 0 && (
+                  <p className="empty">{shoppingModeHideDone && stats.total > 0 ? '這間店的東西都買齊了！' : '這間店還沒有食材。'}</p>
+                )}
+              </div>
+
+              <footer className="shop-mode-foot">
+                <div className="shop-mode-spent">
+                  <span className="muted small">已花</span>
+                  <strong>{formatMoney(stats.spent)}</strong>
+                  <span className="muted small">預估 {formatMoney(stats.estimated)}</span>
+                </div>
+                <label className="shop-mode-receipt">
+                  <span className="muted small">收據總額</span>
+                  <input
+                    type="number"
+                    min="0"
+                    inputMode="numeric"
+                    className="input input-sm"
+                    value={store.receiptTotal ?? ''}
+                    onChange={(event) => updateStoreReceipt(store.id, event.target.value)}
+                    placeholder="結帳後填"
+                  />
+                </label>
+                <button type="button" className="btn" onClick={() => setShoppingModeStoreId(null)}>
+                  完成
+                </button>
+              </footer>
+            </div>
+          )
+        })()}
 
       {lightbox && lightboxItem && (
         <div className="lightbox" role="dialog" aria-modal="true" aria-label={lightbox.title} onClick={() => setLightbox(null)}>

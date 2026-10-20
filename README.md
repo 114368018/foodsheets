@@ -25,6 +25,8 @@
 2. **食材採買模組 (Shopping List)**：可新增採購地點 (如全聯、菜市場)，將需採買的項目列入，填寫預估/實際價格，並標記是否已購買。
 3. **食材庫維護**：維護系統共用的預設食材選單。
 4. **數字微調**：能在總表中對自動加總的食材/工具數量進行手動增刪微調。
+5. **採買三步驟**：依分類與參考價建議去菜市場／全聯／Costco 買並估價、一鍵分配；到店用手機「採買模式」邊買邊勾、記金額；最後填收據總額，自動算出實際花費與各組分攤。
+6. **價格參考**：可維護各商店的參考價、包裝數量與是否秤重計價。
 
 ## 🛠️ 技術架構 (Tech Stack)
 - **前端工具**：Vite + React 19 + TypeScript
@@ -55,6 +57,10 @@ npm run dev:vercel
 # 進行打包建置
 npm run build
 ```
+
+### 用 Firestore 模擬器在本機測試（不會動到正式資料）
+1. 另開終端機：`npx firebase-tools emulators:start --only firestore --project demo-foodsheets`（需要 Java）
+2. 在 `.env.local` 加上 `VITE_FIRESTORE_EMULATOR_HOST=127.0.0.1:8080`（埠號依模擬器顯示為準）與 `VITE_FIREBASE_PROJECT_ID=demo-foodsheets`，再執行 `npm run dev`。
 
 ### 雲端資源服務設定
 1. **Firebase**：請建立 Firebase 專案並啟用 Firestore Database（預設為測試模式或自行設定規則）。
