@@ -1,5 +1,5 @@
-// Ingredient names between Chinese and English, so groups can type either and summaries still add up.
-// The built-in dictionary covers the ingredient library; anything else is machine-translated once and
+// Ingredient and tool names between Chinese and English, so groups can type either and summaries still add up.
+// The built-in dictionaries cover the ingredient and tool libraries; anything else is machine-translated once and
 // saved in the shared data ("learned" translations), where admins can correct it.
 
 // Chinese (as in the ingredient library) -> English.
@@ -108,13 +108,13 @@ const singular = (word: string): string => {
 
 const DESCRIPTORS = /^(fresh|organic|large|small|medium|whole|raw|chopped|sliced|diced|minced|ground|frozen|dried|baby)\s+/
 
-const EN_ZH: Record<string, string> = (() => {
+const buildEnglishIndex = (zhEn: Record<string, string>, extraEnZh: Record<string, string>): Record<string, string> => {
   const map: Record<string, string> = {}
-  Object.entries(BUILTIN_ZH_EN).forEach(([zh, en]) => {
+  Object.entries(zhEn).forEach(([zh, en]) => {
     const key = normalizeEnglish(en)
     if (!map[key]) map[key] = zh
   })
-  Object.entries(EXTRA_EN_ZH).forEach(([en, zh]) => {
+  Object.entries(extraEnZh).forEach(([en, zh]) => {
     map[normalizeEnglish(en)] = zh
   })
   // "Dragonfruit" should find "dragon fruit": also index each multi-word name without spaces.
@@ -123,7 +123,9 @@ const EN_ZH: Record<string, string> = (() => {
     if (!map[compact]) map[compact] = zh
   })
   return map
-})()
+}
+
+const EN_ZH = buildEnglishIndex(BUILTIN_ZH_EN, EXTRA_EN_ZH)
 
 // Learned translations are stored under "en:<normalized English>" and "zh:<normalized Chinese>".
 export const learnedKey = (name: string): string =>
@@ -131,14 +133,14 @@ export const learnedKey = (name: string): string =>
 
 // English -> Chinese: learned first (admins can correct), then the dictionary with simple plural and
 // "fresh/diced/…" handling. Returns null when unknown.
-export const englishToChinese = (name: string, learned: Record<string, string>): string | null => {
+const lookupChinese = (name: string, learned: Record<string, string>, index: Record<string, string>): string | null => {
   const base = normalizeEnglish(name)
   if (!base) return null
   const candidates = [base, base.split(' ').map(singular).join(' ')]
   const stripped = base.replace(DESCRIPTORS, '')
   if (stripped !== base) candidates.push(stripped, stripped.split(' ').map(singular).join(' '))
   for (const candidate of candidates) {
-    const hit = learned[`en:${candidate}`] ?? EN_ZH[candidate] ?? EN_ZH[candidate.replace(/ /g, '')]
+    const hit = learned[`en:${candidate}`] ?? index[candidate] ?? index[candidate.replace(/ /g, '')]
     if (hit) return hit
   }
   return null
@@ -146,13 +148,62 @@ export const englishToChinese = (name: string, learned: Record<string, string>):
 
 // Chinese -> English: learned first, then the dictionary, then the English name someone typed that was
 // translated into this Chinese name (so it stays readable in English mode). Returns null when unknown.
-export const chineseToEnglish = (name: string, learned: Record<string, string>): string | null => {
+const lookupEnglish = (name: string, learned: Record<string, string>, zhEn: Record<string, string>): string | null => {
   const compact = name.replace(/\s+/g, '')
-  const direct = learned[`zh:${compact.toLowerCase()}`] ?? BUILTIN_ZH_EN[compact]
+  const direct = learned[`zh:${compact.toLowerCase()}`] ?? zhEn[compact]
   if (direct) return direct
   const typed = Object.keys(learned).find((key) => key.startsWith('en:') && learned[key] === compact)
   return typed ? typed.charAt(3).toUpperCase() + typed.slice(4) : null
 }
+
+export const englishToChinese = (name: string, learned: Record<string, string>) => lookupChinese(name, learned, EN_ZH)
+export const chineseToEnglish = (name: string, learned: Record<string, string>) => lookupEnglish(name, learned, BUILTIN_ZH_EN)
+
+// Tools, the same way: the tool library plus common extras. Learned translations are shared with
+// ingredients (a word means the same thing in either list).
+export const BUILTIN_TOOL_ZH_EN: Record<string, string> = {
+  卡式爐: 'Portable gas stove', 瓦斯爐: 'Gas stove', 電磁爐: 'Induction cooker', 電鍋: 'Electric cooker',
+  烤箱: 'Oven', 大烤箱: 'Large oven', 有變溫功能的烤箱: 'Oven with temperature control', 氣炸鍋: 'Air fryer',
+  微波爐: 'Microwave', 電熱水壺: 'Electric kettle', 鍋子: 'Pot', 飯鍋: 'Rice cooker', 鐵鍋: 'Iron wok',
+  不鏽鋼鍋: 'Stainless steel pot', 炒鍋: 'Wok', 平底鍋: 'Frying pan', 小平底鍋: 'Small frying pan', 湯鍋: 'Soup pot',
+  大湯鍋: 'Large soup pot', 大瓷鍋: 'Large ceramic pot', 大的陶瓷鍋子: 'Large ceramic pot', 大鐵盆: 'Large metal basin',
+  鍋蓋: 'Pot lid', 蒸籠: 'Steamer basket', 鐵盤: 'Baking tray', 大鐵盤: 'Large baking tray', 烤盤: 'Baking pan',
+  圓形模具: 'Round mold', 圓形壓模器: 'Round cookie cutter', 蛋糕模: 'Cake mold', 裝奶酪的容器: 'Panna cotta cups',
+  烤布蕾容器: 'Crème brûlée ramekins', 杯子蛋糕容器: 'Cupcake cups', 碗: 'Bowl', 小碗: 'Small bowl', 大碗公: 'Large bowl',
+  盤子: 'Plate', 大盤子: 'Large plate', 大白盤: 'Large white plate', 杯子: 'Cup', 保鮮盒: 'Food container',
+  砧板: 'Cutting board', 菜刀: 'Kitchen knife', 水果刀: 'Fruit knife', 刨刀: 'Peeler', 削皮刀: 'Vegetable peeler',
+  剪刀: 'Scissors', 料理剪刀: 'Kitchen scissors', 刨絲器: 'Grater', 磨泥器: 'Zester', 開罐器: 'Can opener',
+  濾網: 'Strainer', 篩網: 'Sieve', 篩子: 'Sifter', 擀麵棍: 'Rolling pin', 夾子: 'Tongs', 洗菜籃: 'Colander',
+  果汁機: 'Blender', 攪拌器: 'Mixer', 電動打蛋器: 'Electric hand mixer', 打蛋器: 'Whisk', 分蛋器: 'Egg separator',
+  刮刀: 'Spatula', 鍋鏟: 'Turner', 矽膠鍋鏟: 'Silicone turner', 湯勺: 'Ladle', 湯匙: 'Spoon', 小湯匙: 'Small spoon',
+  大湯匙: 'Serving spoon', 筷子: 'Chopsticks', 叉子: 'Fork', 毛刷: 'Pastry brush', 量杯: 'Measuring cup',
+  量匙: 'Measuring spoons', 電子秤: 'Kitchen scale', 溫度計: 'Thermometer', 計時器: 'Timer', 裱花袋: 'Piping bag',
+  噴槍: 'Kitchen torch', 隔熱手套: 'Oven mitts', 手套: 'Gloves', 鋁箔紙: 'Aluminum foil', 烘焙紙: 'Baking paper',
+  保鮮膜: 'Plastic wrap', 廚房紙巾: 'Paper towels', 竹籤: 'Skewers', 牙籤: 'Toothpicks', 抹布: 'Dish cloth',
+  菜瓜布: 'Scrub sponge', 延長線: 'Extension cord', 托盤: 'Tray',
+}
+
+const EXTRA_TOOL_EN_ZH: Record<string, string> = {
+  knife: '菜刀', knives: '菜刀', 'chef knife': '菜刀', "chef's knife": '菜刀', 'cooking knife': '菜刀',
+  'paring knife': '水果刀', pan: '平底鍋', 'fry pan': '平底鍋', skillet: '平底鍋', 'non stick pan': '平底鍋',
+  saucepan: '湯鍋', 'stock pot': '大湯鍋', stockpot: '大湯鍋', 'cooking pot': '鍋子', 'chopping board': '砧板',
+  'cutting board': '砧板', board: '砧板', scale: '電子秤', 'digital scale': '電子秤', 'egg beater': '打蛋器',
+  'balloon whisk': '打蛋器', 'hand mixer': '電動打蛋器', 'stand mixer': '攪拌器', 'mixing bowl': '大碗公',
+  'mesh strainer': '濾網', 'rubber spatula': '刮刀', 'silicone spatula': '刮刀', 'wok spatula': '鍋鏟',
+  'spatula turner': '鍋鏟', foil: '鋁箔紙', 'tin foil': '鋁箔紙', 'aluminium foil': '鋁箔紙', 'parchment paper': '烘焙紙',
+  'baking sheet': '鐵盤', 'sheet pan': '鐵盤', 'cling film': '保鮮膜', 'cling wrap': '保鮮膜', 'paper towel': '廚房紙巾',
+  'kitchen paper': '廚房紙巾', 'microwave oven': '微波爐', 'toaster oven': '烤箱', 'blow torch': '噴槍', blowtorch: '噴槍',
+  torch: '噴槍', 'pastry bag': '裱花袋', 'camping stove': '卡式爐', 'portable stove': '卡式爐', 'butane stove': '卡式爐',
+  stove: '瓦斯爐', 'induction stove': '電磁爐', kettle: '電熱水壺', steamer: '蒸籠', 'electric steamer': '電鍋',
+  ramekin: '烤布蕾容器', ramekins: '烤布蕾容器', 'cupcake liners': '杯子蛋糕容器', 'cookie cutter': '圓形壓模器',
+  'serving plate': '大盤子', dish: '盤子', 'oven mitt': '隔熱手套', 'oven gloves': '隔熱手套', container: '保鮮盒',
+  tupperware: '保鮮盒', sponge: '菜瓜布', 'extension cable': '延長線', 'power strip': '延長線',
+}
+
+const TOOL_EN_ZH = buildEnglishIndex(BUILTIN_TOOL_ZH_EN, EXTRA_TOOL_EN_ZH)
+
+export const toolEnglishToChinese = (name: string, learned: Record<string, string>) => lookupChinese(name, learned, TOOL_EN_ZH)
+export const toolChineseToEnglish = (name: string, learned: Record<string, string>) => lookupEnglish(name, learned, BUILTIN_TOOL_ZH_EN)
 
 // Machine-translation result cleanup: one line, no trailing punctuation, sensible capitalization.
 export const cleanMachineTranslation = (source: string, result: string, toEnglish: boolean): string | null => {

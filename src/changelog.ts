@@ -6,6 +6,15 @@ export type ChangelogEntry = {
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
+    version: 'v2.7.1',
+    date: '2026-10-24',
+    changes: [
+      '修正「立即更新價格」在 Vercel 上出現 500 錯誤：伺服器程式載入共用檔案時少了副檔名，部署後無法啟動。錯誤訊息也改成依實際狀況顯示，不再一律說「需要部署在 Vercel」。',
+      '工具也會自動翻譯：英文輸入的工具（Frying pan、Knives…）會對應成中文並在工具總表合併；英文模式顯示英文工具名稱與單位，匯出的工具 Word 寫成「Frying pan (平底鍋)」。工具總表新增「工具中英對照」可修正翻譯。',
+      '英文名稱有空格時（例如 Frying pan）不會再多出重複的「含：」「統計為」提示。',
+    ],
+  },
+  {
     version: 'v2.7.0',
     date: '2026-10-24',
     changes: [

@@ -1,6 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { INGREDIENT_LIBRARY_SEED } from '../src/ingredient-library.ts'
+import { TOOL_LIBRARY_SEED } from '../src/tool-library.ts'
+import { BUILTIN_TOOL_ALIASES } from '../src/name-normalize.ts'
 import {
   BUILTIN_ZH_EN,
   chineseToEnglish,
@@ -9,6 +11,9 @@ import {
   isEnglishName,
   learnedKey,
   amountToEnglish,
+  BUILTIN_TOOL_ZH_EN,
+  toolEnglishToChinese,
+  toolChineseToEnglish,
 } from '../src/ingredient-translate.ts'
 
 test('every library ingredient has a built-in English name', () => {
@@ -62,4 +67,19 @@ test('amounts in English', () => {
   assert.equal(amountToEnglish('2 大匙'), '2 tbsp')
   assert.equal(amountToEnglish('適量'), 'as needed')
   assert.equal(amountToEnglish('200 ml'), '200 ml')
+})
+
+test('every library tool has a built-in English name', () => {
+  const missing = TOOL_LIBRARY_SEED.filter((name) => !BUILTIN_TOOL_ZH_EN[BUILTIN_TOOL_ALIASES[name] ?? name])
+  assert.deepEqual(missing, [])
+})
+
+test('tools between English and Chinese', () => {
+  assert.equal(toolEnglishToChinese('Frying pan', {}), '平底鍋')
+  assert.equal(toolEnglishToChinese('Knives', {}), '菜刀')
+  assert.equal(toolEnglishToChinese('large mixing bowls', {}), '大碗公')
+  assert.equal(toolEnglishToChinese('Chopping boards', {}), '砧板')
+  assert.equal(toolEnglishToChinese('Tomato', {}), null)
+  assert.equal(toolChineseToEnglish('平底鍋', {}), 'Frying pan')
+  assert.equal(toolChineseToEnglish('奇怪的鍋', { 'en:weird pot': '奇怪的鍋' }), 'Weird pot')
 })

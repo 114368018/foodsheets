@@ -42,6 +42,9 @@ import {
   learnedKey,
   amountToEnglish,
   unitToEnglish,
+  BUILTIN_TOOL_ZH_EN,
+  toolChineseToEnglish,
+  toolEnglishToChinese,
 } from './ingredient-translate'
 import { nextId } from './ids'
 import {
@@ -1255,6 +1258,18 @@ const loadUiPrefs = (): UiPrefs => {
 const resolveIngredientName = (name: string, aliases: Record<string, string>, learned: Record<string, string>) =>
   canonicalName((isEnglishName(name) && englishToChinese(name, learned)) || name, aliases, BUILTIN_INGREDIENT_ALIASES)
 
+// Same for tools: Frying pan -> 平底鍋, then 煎鍋 -> 平底鍋 and the other aliases.
+const resolveToolName = (name: string, aliases: Record<string, string>, learned: Record<string, string>) =>
+  canonicalName((isEnglishName(name) && toolEnglishToChinese(name, learned)) || name, aliases, BUILTIN_TOOL_ALIASES)
+
+type NameTranslator = {
+  toChinese: (name: string, learned: Record<string, string>) => string | null
+  toEnglish: (name: string, learned: Record<string, string>) => string | null
+  builtin: Record<string, string>
+}
+const INGREDIENT_TRANSLATOR: NameTranslator = { toChinese: englishToChinese, toEnglish: chineseToEnglish, builtin: BUILTIN_ZH_EN }
+const TOOL_TRANSLATOR: NameTranslator = { toChinese: toolEnglishToChinese, toEnglish: toolChineseToEnglish, builtin: BUILTIN_TOOL_ZH_EN }
+
 // Short label for the collapsed sidebar, in whatever language the name is shown in:
 // 第一組 -> 一, 學長姐組 -> 學長, Group 1 -> 1, Sample group -> SG.
 const CHINESE_DIGITS: Record<string, number> = { 零: 0, 〇: 0, 一: 1, 二: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }
@@ -1484,7 +1499,7 @@ function App() {
   const [priceUpdating, setPriceUpdating] = useState(false)
   const [priceUpdateMessage, setPriceUpdateMessage] = useState('')
   const [aliasDraft, setAliasDraft] = useState({ from: '', to: '' })
-  const [translationsExpanded, setTranslationsExpanded] = useState(false)
+  const [translationsExpanded, setTranslationsExpanded] = useState<Record<string, boolean>>({})
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncRetryTick, setSyncRetryTick] = useState(0)
   const [syncStatus, setSyncStatus] = useState(
@@ -1587,37 +1602,50 @@ function App() {
 
   const canonicalIngredient = (name: string) => resolveIngredientName(name, ingredientAliases, nameTranslations)
 
-  // An ingredient name in the language being shown: 番茄 reads "Tomato" in English mode, and an
-  // English name reads in Chinese in Chinese mode, when a translation is known.
-  const ingredientLabel = (name: string) => {
-    const display = canonicalIngredient(name).display || name.trim()
+  const canonicalTool = (name: string) => resolveToolName(name, toolAliases, nameTranslations)
+
+  // A name in the language being shown: 番茄 reads "Tomato" in English mode, and an English name
+  // reads in Chinese in Chinese mode, when a translation is known.
+  const nameLabel = (name: string, resolve: typeof canonicalIngredient, translator: NameTranslator) => {
+    const display = resolve(name).display || name.trim()
     if (lang === 'en') {
-      return isChineseName(display) ? (chineseToEnglish(display, nameTranslations) ?? display) : display
+      return isChineseName(display) ? (translator.toEnglish(display, nameTranslations) ?? display) : display
     }
-    return isEnglishName(display) ? (englishToChinese(display, nameTranslations) ?? display) : display
+    return isEnglishName(display) ? (translator.toChinese(display, nameTranslations) ?? display) : display
   }
+  const ingredientLabel = (name: string) => nameLabel(name, canonicalIngredient, INGREDIENT_TRANSLATOR)
+  const toolLabel = (name: string) => nameLabel(name, canonicalTool, TOOL_TRANSLATOR)
 
   // Small hint under an entry cell: what a typed English name counts as (Dragonfruit → 火龍果), otherwise
   // the name in the current language. Empty when it would only repeat what was typed.
-  const entryHint = (name: string) => {
+  const nameHint = (name: string, resolve: typeof canonicalIngredient, label: (name: string) => string) => {
     const typed = name.trim()
-    const hint = isEnglishName(typed) ? canonicalIngredient(name).display : ingredientLabel(name)
+    const hint = isEnglishName(typed) ? resolve(name).display : label(name)
     return typed && hint !== typed ? hint : ''
   }
+  const entryHint = (name: string) => nameHint(name, canonicalIngredient, ingredientLabel)
+  const toolEntryHint = (name: string) => nameHint(name, canonicalTool, toolLabel)
 
   // For exports in English mode: "Tomato (番茄)" or "Tomatoes (番茄)" when it was typed in English, so the
   // shopper can still read the Chinese name.
-  const bilingualIngredient = (name: string) => {
+  const bilingualName = (name: string, resolve: typeof canonicalIngredient, label: (name: string) => string) => {
     const typed = name.trim()
     if (lang !== 'en') {
-      return ingredientLabel(name)
+      return label(name)
     }
-    const english = isEnglishName(typed) ? typed : ingredientLabel(name)
-    const chinese = canonicalIngredient(name).display || typed
+    const english = isEnglishName(typed) ? typed : label(name)
+    const chinese = resolve(name).display || typed
     return english !== chinese && isChineseName(chinese) ? `${english} (${chinese})` : english
   }
+  const bilingualIngredient = (name: string) => bilingualName(name, canonicalIngredient, ingredientLabel)
+  const bilingualTool = (name: string) => bilingualName(name, canonicalTool, toolLabel)
   const amountLabel = (text: string) => (lang === 'en' ? amountToEnglish(text) : text)
-  const canonicalTool = (name: string) => canonicalName(name, toolAliases, BUILTIN_TOOL_ALIASES)
+  // "Frying pan" and "frying  pan" are the same name; "含：…" and "統計為…" only list real differences.
+  const sameName = (a: string, b: string) => cleanDisplayName(a).toLowerCase() === cleanDisplayName(b).toLowerCase()
+  const renderVariants = (variants: string[], label: string) => {
+    const others = variants.filter((variant) => !sameName(variant, label))
+    return others.length > 0 && <span className="merged-from">{t('含：{0}', [others.join('、')])}</span>
+  }
 
   // Totals per ingredient after unifying spellings (蕃茄 = 番茄) and units (克 = g, 1 公斤 = 1000 g).
   const ingredientSummaryRows = useMemo<IngredientSummaryRow[]>(() => {
@@ -1735,7 +1763,7 @@ function App() {
         return
       }
 
-      const name = canonicalName(original, toolAliases, BUILTIN_TOOL_ALIASES)
+      const name = resolveToolName(original, toolAliases, nameTranslations)
       let target = map.get(name.key)
       if (!target) {
         target = { key: name.key, tool: name.display, variants: [], unit: '', note: '', sumQty: 0 }
@@ -1747,7 +1775,8 @@ function App() {
         target.variants.push(original)
       }
 
-      const unit = cleanDisplayName(row.unit)
+      const rawUnit = cleanDisplayName(row.unit)
+      const unit = /^(pcs?|pieces?|ea|each|sets?|units?)$/i.test(rawUnit) ? '個' : rawUnit
       if (unit) {
         const counts = unitCounts.get(name.key) ?? new Map<string, number>()
         counts.set(unit, (counts.get(unit) ?? 0) + 1)
@@ -1768,7 +1797,7 @@ function App() {
         note: (notesByKey.get(row.key) ?? []).join(' / '),
       }))
       .sort((a, b) => a.tool.localeCompare(b.tool, 'zh-Hant'))
-  }, [allToolRows, toolAliases])
+  }, [allToolRows, nameTranslations, toolAliases])
 
   const invalidIngredientRowIds = useMemo(
     () =>
@@ -2981,20 +3010,32 @@ function App() {
   // Chinese names only while someone is using the English interface.
   const translationsInFlightRef = useRef<Set<string>>(new Set())
   useEffect(() => {
+    const untranslated = (
+      name: string,
+      translator: NameTranslator,
+      resolve: (name: string, aliases: Record<string, string>, learned: Record<string, string>) => { display: string },
+      aliases: Record<string, string>,
+    ) => {
+      if (isEnglishName(name)) {
+        return translator.toChinese(name, nameTranslations) ? null : name
+      }
+      const display = resolve(name, aliases, nameTranslations).display
+      return lang === 'en' && isChineseName(display) && !translator.toEnglish(display, nameTranslations) ? display : null
+    }
     const names = new Set<string>()
-    nonSampleGroupIds.forEach((groupId) =>
-      groupData[groupId].ingredientRows.forEach((row) => row.ingredient.trim() && names.add(row.ingredient.trim())),
-    )
+    nonSampleGroupIds.forEach((groupId) => {
+      groupData[groupId].ingredientRows.forEach((row) => {
+        const name = row.ingredient.trim() && untranslated(row.ingredient.trim(), INGREDIENT_TRANSLATOR, resolveIngredientName, ingredientAliases)
+        if (name) names.add(name)
+      })
+      groupData[groupId].toolRows.forEach((row) => {
+        const name = row.tool.trim() && untranslated(row.tool.trim(), TOOL_TRANSLATOR, resolveToolName, toolAliases)
+        if (name) names.add(name)
+      })
+    })
 
     const pending = Array.from(names)
-      .map((name) => {
-        if (isEnglishName(name)) {
-          return englishToChinese(name, nameTranslations) ? null : name
-        }
-        const display = resolveIngredientName(name, ingredientAliases, nameTranslations).display
-        return lang === 'en' && isChineseName(display) && !chineseToEnglish(display, nameTranslations) ? display : null
-      })
-      .filter((name): name is string => Boolean(name) && !translationsInFlightRef.current.has(learnedKey(name as string)))
+      .filter((name) => !translationsInFlightRef.current.has(learnedKey(name)))
       .slice(0, 8)
     if (pending.length === 0) {
       return
@@ -3030,7 +3071,7 @@ function App() {
     }, 1500)
 
     return () => window.clearTimeout(timer)
-  }, [groupData, ingredientAliases, lang, nameTranslations, nonSampleGroupIds])
+  }, [groupData, ingredientAliases, lang, nameTranslations, nonSampleGroupIds, toolAliases])
 
   // Push unsynced edits. The transaction merges them onto the latest cloud state,
   // so concurrent edits from other groups are never overwritten.
@@ -3349,7 +3390,12 @@ function App() {
         errors?: string[]
       }
       if (!response.ok) {
-        setPriceUpdateMessage(result.error ?? t('更新失敗（{0}），自動更新需要部署在 Vercel 上才能使用。', [response.status]))
+        setPriceUpdateMessage(
+          result.error ??
+            (response.status === 404
+              ? t('找不到更新程式（404），自動更新需要部署在 Vercel 上才能使用。')
+              : t('伺服器錯誤（{0}），請稍後再試；若一直失敗，可到 Vercel 專案的 Logs 查看 update-prices 的錯誤訊息。', [response.status])),
+        )
         return
       }
       const problems = result.errors?.length ? t('，{0} 項有問題', [result.errors.length]) : ''
@@ -3511,7 +3557,7 @@ function App() {
       new Paragraph({
         children: [
           new TextRun({ text: `${index + 1}. `, bold: true, color: '0F766E' }),
-          new TextRun({ text: row.tool.trim(), bold: true, color: '0F172A' }),
+          new TextRun({ text: bilingualTool(row.tool), bold: true, color: '0F172A' }),
           new TextRun({ text: `  ${row.qty.trim() ? amountLabel(`${row.qty.trim()} ${row.unit.trim()}`) : `${t('未填數量')} ${row.unit.trim()}`}`, color: '111827' }),
         ],
         spacing: { after: row.note.trim() ? 40 : 120 },
@@ -3918,27 +3964,37 @@ function App() {
     )
   }
 
-  // Admin list of every ingredient with its translation; built-in ones show as placeholders.
-  const renderTranslationTable = () => {
-    const names = Array.from(new Set(ingredientSummaryRows.map((row) => row.ingredient)))
-    const missing = names.filter((name) => (isChineseName(name) ? !chineseToEnglish(name, nameTranslations) : !englishToChinese(name, nameTranslations))).length
+  // Admin list of every ingredient (or tool) with its translation; built-in ones show as placeholders.
+  const renderTranslationTable = (kind: 'ingredient' | 'tool') => {
+    const isIngredient = kind === 'ingredient'
+    const translator = isIngredient ? INGREDIENT_TRANSLATOR : TOOL_TRANSLATOR
+    const names = Array.from(
+      new Set(isIngredient ? ingredientSummaryRows.map((row) => row.ingredient) : toolSummaryRows.map((row) => row.tool)),
+    )
+    const missing = names.filter((name) =>
+      isChineseName(name) ? !translator.toEnglish(name, nameTranslations) : !translator.toChinese(name, nameTranslations),
+    ).length
+    const expanded = translationsExpanded[kind] === true
+    const title = isIngredient ? t('食材中英對照') : t('工具中英對照')
 
     return (
       <section className="card">
         <header className="card-head">
-          {renderCollapseButton(!translationsExpanded, () => setTranslationsExpanded((previous) => !previous), t('食材中英對照'))}
-          <h3 className="card-title">{t('食材中英對照')}</h3>
+          {renderCollapseButton(!expanded, () => setTranslationsExpanded((previous) => ({ ...previous, [kind]: !expanded })), title)}
+          <h3 className="card-title">{title}</h3>
           <span className="muted small merge-intro">
-            {t('英文和中文輸入的同一種食材會自動合併；沒有內建翻譯的會自動翻譯一次，翻錯可以在這裡改。')}
+            {isIngredient
+              ? t('英文和中文輸入的同一種食材會自動合併；沒有內建翻譯的會自動翻譯一次，翻錯可以在這裡改。')
+              : t('英文和中文輸入的同一種工具會自動合併；沒有內建翻譯的會自動翻譯一次，翻錯可以在這裡改。')}
           </span>
           {missing > 0 && <span className="chip chip-warn">{t('{0} 項待翻譯', [missing])}</span>}
         </header>
-        {translationsExpanded && (
+        {expanded && (
           <div className="card-body">
             <div className="translation-grid">
               {names.map((name) => {
                 const key = learnedKey(name)
-                const builtin = isChineseName(name) ? BUILTIN_ZH_EN[name.replace(/\s+/g, '')] : englishToChinese(name, {})
+                const builtin = isChineseName(name) ? translator.builtin[name.replace(/\s+/g, '')] : translator.toChinese(name, {})
                 const learned = nameTranslations[key]
                 return (
                   <label key={name} className="translation-row">
@@ -4727,6 +4783,11 @@ function App() {
                                   aria-label={t('工具')}
                                   list="tool-library-options"
                                 />
+                                {toolEntryHint(row.tool) && (
+                                  <span className="name-translation" aria-hidden="true">
+                                    {toolEntryHint(row.tool)}
+                                  </span>
+                                )}
                               </td>
                               <td className="cell-qty" data-label={t('數量 *')}>
                                 <input
@@ -4799,7 +4860,7 @@ function App() {
         {currentTab === '食材總表' && adminUnlocked && (
           <>
           {renderNameMerge('ingredient')}
-          {renderTranslationTable()}
+          {renderTranslationTable('ingredient')}
           <section className="card">
             <header className="card-head">
               <h2 className="card-title">{t('食材總表')}</h2>
@@ -4856,9 +4917,7 @@ function App() {
                             <span className="merged-name">
                               {ingredientLabel(row.ingredient)}
                               {row.unitConflict && <span className="chip chip-warn">{t('單位不一')}</span>}
-                              {row.variants.length > 0 && (
-                                <span className="merged-from">{t('含：{0}', [row.variants.join('、')])}</span>
-                              )}
+                              {renderVariants(row.variants, ingredientLabel(row.ingredient))}
                             </span>
                           </span>
                         </td>
@@ -4899,6 +4958,7 @@ function App() {
         {currentTab === '工具總表' && adminUnlocked && (
           <>
           {renderNameMerge('tool')}
+          {renderTranslationTable('tool')}
           <section className="card">
             <header className="card-head">
               <h2 className="card-title">{t('工具總表')}</h2>
@@ -4949,8 +5009,8 @@ function App() {
                         </td>
                         <td className="strong">
                           <span className="merged-name">
-                            {row.tool}
-                            {row.variants.length > 0 && <span className="merged-from">{t('含：{0}', [row.variants.join('、')])}</span>}
+                            {toolLabel(row.tool)}
+                            {renderVariants(row.variants, toolLabel(row.tool))}
                           </span>
                         </td>
                         <td className="num">{formatNumber(row.sumQty)}</td>
@@ -5165,7 +5225,7 @@ function App() {
                                     )}
                                     <span className="merged-name">
                                       {row.ingredient}
-                                      {ingredientLabel(row.ingredient) !== cleanDisplayName(row.ingredient) && (
+                                      {!sameName(ingredientLabel(row.ingredient), row.ingredient) && (
                                         <span className="merged-from">{t('統計為「{0}」', [ingredientLabel(row.ingredient)])}</span>
                                       )}
                                     </span>
@@ -5255,13 +5315,13 @@ function App() {
                                 <td className="strong">
                                   <span className="merged-name">
                                     {row.tool}
-                                    {canonicalTool(row.tool).display !== cleanDisplayName(row.tool) && (
-                                      <span className="merged-from">{t('統計為「{0}」', [canonicalTool(row.tool).display])}</span>
+                                    {!sameName(toolLabel(row.tool), row.tool) && (
+                                      <span className="merged-from">{t('統計為「{0}」', [toolLabel(row.tool)])}</span>
                                     )}
                                   </span>
                                 </td>
                                 <td className="num">{row.qty || '–'}</td>
-                                <td>{row.unit || '–'}</td>
+                                <td>{(lang === 'en' ? unitToEnglish(row.unit) : row.unit) || '–'}</td>
                                 <td className="muted">{row.note}</td>
                               </tr>
                             )

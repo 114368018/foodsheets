@@ -12,7 +12,7 @@ import {
   toFirestoreValue,
   toRocDate,
   type ProduceRow,
-} from './_price-sources'
+} from './_price-sources.js'
 
 type VercelRequest = {
   method?: string
