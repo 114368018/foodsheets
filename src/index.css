@@ -12,6 +12,7 @@
   --border: #d6d0c5;
   --border-soft: #e6e1d8;
   --border-strong: #b4ac9e;
+  --border-faint: #f0ece6;
 
   --text: #171512;
   --text-2: #3b3732;
@@ -127,6 +128,7 @@ label:focus-within > .icon,
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr);
   min-height: 100vh;
+  transition: grid-template-columns 0.2s ease;
 }
 
 .sidebar {
@@ -143,9 +145,139 @@ label:focus-within > .icon,
 }
 
 .sidebar-brand {
-  display: grid;
+  display: flex;
+  align-items: flex-start;
   gap: 8px;
+  padding: 0 4px;
+}
+
+.brand-text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sidebar-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--sidebar-muted);
+}
+
+.sidebar-toggle:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text);
+}
+
+.sync-dot-compact {
+  display: none;
+}
+
+.nav-item-short {
+  display: none;
+}
+
+.lang-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   padding: 0 8px;
+  color: var(--sidebar-muted);
+}
+
+.lang-switch .icon {
+  margin-right: 4px;
+}
+
+.lang-switch button {
+  height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--sidebar-muted);
+  font-size: 12.5px;
+}
+
+.lang-switch button:hover {
+  color: var(--sidebar-text);
+}
+
+.lang-switch button.is-active {
+  background: var(--sidebar-active);
+  color: var(--sidebar-text);
+  font-weight: 700;
+}
+
+/* Collapsed: a narrow rail with short labels and status dots. */
+.app-shell.is-nav-collapsed {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.is-nav-collapsed .sidebar {
+  padding: 14px 8px;
+}
+
+.is-nav-collapsed .sidebar-brand {
+  flex-direction: column;
+  align-items: center;
+  padding: 0;
+}
+
+.is-nav-collapsed .brand-text,
+.is-nav-collapsed .nav-label,
+.is-nav-collapsed .nav-item-name,
+.is-nav-collapsed .admin-badge,
+.is-nav-collapsed .lang-switch .icon {
+  display: none;
+}
+
+.is-nav-collapsed .sync-dot-compact {
+  display: block;
+}
+
+.is-nav-collapsed .nav-item {
+  position: relative;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0;
+}
+
+.is-nav-collapsed .nav-item-short {
+  display: inline;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.is-nav-collapsed .nav-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 9px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  font-size: 0;
+}
+
+.is-nav-collapsed .nav-badge svg {
+  display: none;
+}
+
+.is-nav-collapsed .lang-switch {
+  flex-direction: column;
+  padding: 0;
+}
+
+.is-nav-collapsed .admin-access {
+  justify-content: center;
+  padding: 0;
 }
 
 .brand-eyebrow {
@@ -595,9 +727,9 @@ h1 {
   align-items: center;
   height: 22px;
   padding: 0 8px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--surface-2);
+  background: var(--surface-hover);
   color: var(--text-2);
   font-size: 12px;
   font-weight: 500;
@@ -1052,9 +1184,9 @@ h1 {
 }
 
 .photo-slot.is-empty {
-  border: 1.5px dashed var(--border-strong);
+  border: 0;
   background: transparent;
-  color: var(--text-3);
+  color: var(--placeholder);
   cursor: pointer;
   transition: border-color 0.15s, color 0.15s, background-color 0.15s;
 }
@@ -1289,7 +1421,7 @@ span.photo-slot.is-empty {
 
 .grid-table th {
   padding: 8px 10px 6px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-soft);
   color: var(--text-2);
   font-size: 12px;
   font-weight: 700;
@@ -1299,7 +1431,7 @@ span.photo-slot.is-empty {
 
 .grid-table td {
   padding: 3px 2px;
-  border-bottom: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-faint);
 }
 
 .grid-table tbody tr:last-child td {
@@ -1446,10 +1578,14 @@ span.photo-slot.is-empty {
   background: #faf8f4;
 }
 
+/* Editable cells in read-mostly tables: no box until hovered or focused. */
 .data-table .cell-input {
   height: 30px;
+  background: transparent;
+}
+
+.data-table .cell-input-num {
   background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 .data-table .cell-input-num {
@@ -1529,8 +1665,7 @@ button.ref-thumb:hover {
 }
 
 .ref-thumb.is-empty {
-  border-style: dashed;
-  border-color: var(--border-soft);
+  border-color: transparent;
   background: transparent;
 }
 
@@ -1624,7 +1759,7 @@ button.ref-thumb:hover {
   align-content: start;
   gap: 2px;
   padding: 12px 14px;
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -1740,12 +1875,16 @@ button.ref-thumb:hover {
 /* ---------- Shopping: step 1 assignment list ---------- */
 .assign-list {
   display: grid;
-  gap: 14px;
+  gap: 16px;
 }
 
 .assign-group {
   display: grid;
-  gap: 6px;
+  gap: 0;
+}
+
+.assign-group-title {
+  padding-bottom: 4px;
 }
 
 .assign-group-title,
@@ -1762,14 +1901,12 @@ button.ref-thumb:hover {
   align-items: center;
   gap: 12px;
   padding: 8px 10px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius);
-  background: var(--surface);
+  border-bottom: 1px solid var(--border-faint);
 }
 
 .assign-row:has(.assign-select.is-missing) {
-  border-color: var(--warn-border);
-  background: #fffcf4;
+  background: #fffaf0;
+  box-shadow: inset 3px 0 0 var(--warn-border);
 }
 
 .assign-main {
@@ -2224,7 +2361,6 @@ button.ref-thumb:hover {
 .shop-price .cell-input {
   height: 32px;
   background: var(--surface-2);
-  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 /* ---------- Lightbox ---------- */
@@ -2444,8 +2580,34 @@ button.ref-thumb:hover {
 
 /* Tablet and phone: the sidebar becomes a top bar with scrollable rows. */
 @media (max-width: 860px) {
-  .app-shell {
+  .app-shell,
+  .app-shell.is-nav-collapsed {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .is-nav-collapsed .sidebar {
+    padding: 12px 12px 10px;
+  }
+
+  .is-nav-collapsed .sidebar-brand {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+
+  .is-nav-collapsed .brand-text {
+    display: grid;
+  }
+
+  .is-nav-collapsed .sync-dot-compact {
+    display: none;
+  }
+
+  .is-nav-collapsed .nav-section {
+    display: none;
+  }
+
+  .is-nav-collapsed .lang-switch {
+    flex-direction: row;
   }
 
   .sidebar {
@@ -2924,5 +3086,167 @@ td.num .merged-from {
     flex: 1;
     width: auto;
     min-width: 110px;
+  }
+}
+
+.export-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border);
+}
+
+/* ---------- Price page: automatic updates ---------- */
+.page-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.price-status {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.price-status > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.price-status-notes {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.price-errors summary {
+  color: var(--warn);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.price-errors ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.auto-price {
+  display: block;
+  margin-top: 2px;
+  color: var(--ok);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.source-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 260px;
+}
+
+.market-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 2px 16px;
+  padding: 10px 14px 14px;
+}
+
+.market-item {
+  display: grid;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.market-name {
+  font-weight: 700;
+}
+
+.market-price {
+  color: var(--accent-text);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.changelog-note {
+  margin: 0;
+  padding: 10px 16px 0;
+}
+
+.sidebar-button-quiet {
+  background: var(--sidebar-active);
+}
+
+.sidebar-button-quiet:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.is-nav-collapsed .lang-switch {
+  gap: 4px;
+}
+
+.is-nav-collapsed .lang-switch button {
+  width: 36px;
+  padding: 0;
+}
+
+/* ---------- Ingredient translations ---------- */
+.grid-table .cell-name {
+  position: relative;
+}
+
+.name-translation {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateY(-50%);
+}
+
+.translation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0 24px;
+}
+
+.translation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 64px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.translation-source {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .name-translation {
+    top: 9px;
+    transform: none;
   }
 }

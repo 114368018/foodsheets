@@ -6,7 +6,16 @@ import type { PriceEntry } from './shopping'
 // shoppers enter while buying.
 export const PRICE_REFERENCE_UPDATED = '2026-10'
 
-type SeedRow = [ingredient: string, store: string, price: number, packQty: number, packUnit: string, spec: string, loose?: boolean]
+type SeedRow = [
+  ingredient: string,
+  store: string,
+  price: number,
+  packQty: number,
+  packUnit: string,
+  spec: string,
+  loose?: boolean,
+  sourceUrl?: string,
+]
 
 const SEED: SeedRow[] = [
   // 菜市場：蔬果多為秤重（每台斤），價格隨季節波動大
@@ -86,13 +95,52 @@ const SEED: SeedRow[] = [
   ['白米', 'Costco', 499, 9, 'kg', '9kg'],
 ]
 
-export const PRICE_REFERENCE_SEED: PriceEntry[] = SEED.map(([ingredient, store, price, packQty, packUnit, spec, loose], index) => ({
-  id: index + 1,
-  ingredient,
-  store,
-  price: String(price),
-  packQty: String(packQty),
-  packUnit,
-  spec,
-  ...(loose ? { loose: true } : {}),
-}))
+// 萬家福線上購物 (formerly 家樂福) products, looked up 2026-10-24. Each is linked to its product page,
+// so the daily update keeps the price current. Fresh produce is not sold online and stays on market data.
+const UNI_PROSPERITY_SEED: SeedRow[] = [
+  ['雞蛋', '萬家福', 130, 10, '顆', '非籠飼 10 入', undefined, 'https://online.uni-prosperity.com.tw/zh/%E9%AE%AE%E6%B4%BB%E8%B5%B0%E5%9C%B0%E8%9B%8B/1507003400101.html'],
+  ['牛奶', '萬家福', 85, 930, 'ml', '瑞穗全脂 930ml', undefined, 'https://online.uni-prosperity.com.tw/zh/%E7%B5%B1%E4%B8%80/1501001100101.html'],
+  ['鮮奶油', '萬家福', 349, 1000, 'ml', '總統牌動物性 1L', undefined, 'https://online.uni-prosperity.com.tw/zh/%E7%B8%BD%E7%B5%B1%E7%89%8C/1503201200101.html'],
+  ['無鹽奶油', '萬家福', 49, 100, 'g', '卡貝樂 100g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%8D%A1%E8%B2%9D%E6%A8%82/1503092000101.html'],
+  ['無鹽奶油', '萬家福', 329, 500, 'g', '總統牌 500g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E7%B8%BD%E7%B5%B1%E7%89%8C/1503002000101.html'],
+  ['起司絲', '萬家福', 149, 300, 'g', '寶宏安柏 300g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%AF%B6%E5%AE%8F/1504208300101.html'],
+  ['起司片', '萬家福', 196, 24, '片', '安佳 24 片', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%AE%89%E4%BD%B3/1504003400101.html'],
+  ['白米', '萬家福', 239, 3, 'kg', '3kg', undefined, 'https://online.uni-prosperity.com.tw/zh/%E9%97%9C%E5%B1%B1%E7%A9%80%E5%A0%A1/1451012200101.html'],
+  ['中筋麵粉', '萬家福', 70, 1000, 'g', '駱駝牌 1kg', undefined, 'https://online.uni-prosperity.com.tw/zh/%E9%A7%B1%E9%A7%9D%E7%89%8C/1474001700101.html'],
+  ['低筋麵粉', '萬家福', 70, 1000, 'g', '駱駝牌 1kg', undefined, 'https://online.uni-prosperity.com.tw/zh/%E9%A7%B1%E9%A7%9D%E7%89%8C/1474005000101.html'],
+  ['細砂糖', '萬家福', 36, 1, 'kg', '台糖 1kg', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%8F%B0%E7%B3%96/1437000200101.html'],
+  ['砂糖', '萬家福', 36, 1, 'kg', '台糖 1kg', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%8F%B0%E7%B3%96/1437000200101.html'],
+  ['二號砂糖', '萬家福', 36, 1, 'kg', '台糖 1kg', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%8F%B0%E7%B3%96/1437000400101.html'],
+  ['醬油', '萬家福', 114, 1600, 'ml', '龜甲萬 1600ml', undefined, 'https://online.uni-prosperity.com.tw/zh/%E7%B5%B1%E4%B8%80/1462001400101.html'],
+  ['番茄醬', '萬家福', 58, 560, 'g', '工研 560g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%B7%A5%E7%A0%94%E9%85%A2/1463001000101.html'],
+  ['義大利麵條', '萬家福', 89, 500, 'g', '#16 500g', undefined, 'https://online.uni-prosperity.com.tw/zh/molisana/1450723300101.html'],
+  ['玉米罐頭', '萬家福', 92, 1, '罐', '340g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E7%89%9B%E9%A0%AD%E7%89%8C/1481001600103.html'],
+  ['板豆腐', '萬家福', 20, 1, '盒', '義美 300g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E7%BE%A9%E7%BE%8E/1508000300101.html'],
+  ['嫩豆腐', '萬家福', 18, 1, '盒', '義美 290g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E7%BE%A9%E7%BE%8E/1508000600101.html'],
+  ['食用油', '萬家福', 169, 3, 'l', '台糖 3L', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%8F%B0%E7%B3%96/1461001100101.html'],
+  ['橄欖油', '萬家福', 472, 1000, 'ml', '1L', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%BE%97%E6%84%8F%E7%9A%84%E4%B8%80%E5%A4%A9/1461201800201.html'],
+  ['鹽', '萬家福', 17, 1, 'kg', '台鹽 1kg', undefined, 'https://online.uni-prosperity.com.tw/zh/%E5%8F%B0%E9%B9%BD/1460000500101.html'],
+  ['白吐司', '萬家福', 48, 0.5, '條', '半條', undefined, 'https://online.uni-prosperity.com.tw/zh/%E8%87%AA%E8%A3%BD%E5%93%81/2300002300101.html'],
+  ['優格', '萬家福', 88, 500, 'g', '希臘式無糖 500g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E6%AF%94%E8%8F%B2%E5%A4%9A/1500304300101.html'],
+  ['咖喱', '萬家福', 115, 1, '盒', '佛蒙特 230g', undefined, 'https://online.uni-prosperity.com.tw/zh/house-%E5%A5%BD%E4%BE%8D/1460300300101.html'],
+  ['可可粉', '萬家福', 229, 100, 'g', '100g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E9%9C%B2%E7%89%B9/G423008526301.html'],
+]
+
+const toEntries = (rows: SeedRow[], firstId: number): PriceEntry[] =>
+  rows.map(([ingredient, store, price, packQty, packUnit, spec, loose, sourceUrl], index) => ({
+    id: firstId + index,
+    ingredient,
+    store,
+    price: String(price),
+    packQty: String(packQty),
+    packUnit,
+    spec,
+    ...(loose ? { loose: true } : {}),
+    ...(sourceUrl ? { sourceUrl } : {}),
+  }))
+
+// Starting price lists, applied once per project (an admin deleting entries later is respected).
+export const PRICE_SEED_BATCHES: Array<{ id: string; entries: PriceEntry[] }> = [
+  { id: 'base-2026-10', entries: toEntries(SEED, 1) },
+  { id: 'uni-prosperity-2026-10', entries: toEntries(UNI_PROSPERITY_SEED, 1001) },
+]

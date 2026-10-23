@@ -1,8 +1,8 @@
 // Shopping helpers: where to buy each ingredient, how much it should cost, and unit conversion.
 
-export type StoreKind = '菜市場' | '全聯' | 'Costco'
+export type StoreKind = '菜市場' | '全聯' | '萬家福' | 'Costco'
 
-export const STORE_KINDS: StoreKind[] = ['菜市場', '全聯', 'Costco']
+export const STORE_KINDS: StoreKind[] = ['菜市場', '全聯', '萬家福', 'Costco']
 
 export type PriceEntry = {
   id: number
@@ -14,6 +14,13 @@ export type PriceEntry = {
   spec: string
   // Sold loose by weight (market stalls): cost is proportional instead of whole packs.
   loose?: boolean
+  // Online shop product page (全聯全電商, 萬家福線上購物) whose price the daily update copies in.
+  sourceUrl?: string
+  // When an admin last edited the price by hand (ISO time).
+  updatedAt?: string
+  // Set only on the effective price list: where the shown price came from and when.
+  auto?: 'product' | 'produce'
+  autoAt?: string
 }
 
 type CategoryDef = {
@@ -130,6 +137,9 @@ export const storeKindOf = (storeName: string): StoreKind | null => {
   if (value.includes('市場') || value.includes('菜市')) {
     return '菜市場'
   }
+  if (value.includes('萬家福') || value.includes('家樂福') || value.includes('carrefour')) {
+    return '萬家福'
+  }
   if (value.includes('costco') || value.includes('好市多')) {
     return 'Costco'
   }
@@ -229,6 +239,138 @@ export const suggestPurchase = (
 }
 
 export const formatPack = (entry: PriceEntry): string =>
-  `${entry.loose ? '每' : ''}${entry.packQty && entry.packQty !== '1' ? entry.packQty : ''}${entry.packUnit}`
+  `${entry.packQty && entry.packQty !== '1' ? entry.packQty : ''}${entry.packUnit}`
 
-export const formatMoney = (value: number): string => `$${Math.round(value).toLocaleString('zh-TW')}`
+export const formatMoney = (value: number): string => {
+  const rounded = Math.round(value)
+  return `${rounded < 0 ? '-' : ''}$${Math.abs(rounded).toLocaleString('zh-TW')}`
+}
+
+// Fixed ids for stores created by kind, so concurrent "assign all" from two admins merges into one store.
+export const STORE_KIND_IDS: Record<StoreKind, number> = { 菜市場: 9_000_001, 全聯: 9_000_002, Costco: 9_000_003, 萬家福: 9_000_004 }
+
+// ---------- Spending ----------
+export type StoreItemLike = { id: number; ingredient: string; price: string; purchased?: boolean }
+export type StoreLike<Item extends StoreItemLike = StoreItemLike> = { id: number; items: Item[]; receiptTotal?: string }
+
+export const toMoney = (value: string | undefined): number => {
+  const amount = Number(value)
+  return Number.isFinite(amount) && amount > 0 ? amount : 0
+}
+
+export type StoreStats = {
+  total: number
+  purchased: number
+  unpriced: number
+  itemSum: number
+  estimated: number
+  spent: number
+}
+
+// Spending is the receipt total when one is entered, otherwise the sum of item prices.
+export const computeStoreStats = <Item extends StoreItemLike>(
+  store: StoreLike<Item>,
+  estimateOf: (item: Item) => number,
+): StoreStats => {
+  const items = store.items.filter((item) => item.ingredient.trim())
+  const itemSum = items.reduce((sum, item) => sum + toMoney(item.price), 0)
+  const receipt = toMoney(store.receiptTotal)
+
+  return {
+    total: items.length,
+    purchased: items.filter((item) => item.purchased).length,
+    unpriced: items.filter((item) => !toMoney(item.price)).length,
+    itemSum,
+    estimated: items.reduce((sum, item) => sum + estimateOf(item), 0),
+    spent: receipt > 0 ? receipt : itemSum,
+  }
+}
+
+export type GroupShare = { groupId: string; qty: number }
+export type GroupSpending = { actual: number; estimated: number }
+
+// Splits spending over groups by how much of each ingredient they asked for.
+// - With a receipt total: the receipt is split over the store's items by their price
+//   (or estimate when no price was entered), so the groups' shares add up to the receipt exactly.
+// - Without one: each item's price is split; unpriced items contribute their estimate separately.
+// Amounts that cannot be attributed to any group (item no longer requested) are returned as unallocated.
+export const allocateGroupSpending = <Item extends StoreItemLike>(
+  stores: StoreLike<Item>[],
+  sharesOf: (item: Item) => GroupShare[],
+  estimateOf: (item: Item, store: StoreLike<Item>) => number,
+): { byGroup: Map<string, GroupSpending>; unallocated: GroupSpending } => {
+  const byGroup = new Map<string, GroupSpending>()
+  const unallocated: GroupSpending = { actual: 0, estimated: 0 }
+
+  const add = (item: Item, actual: number, estimated: number) => {
+    const shares = sharesOf(item).filter((share) => share.qty > 0)
+    const totalQty = shares.reduce((sum, share) => sum + share.qty, 0)
+    if (totalQty === 0) {
+      unallocated.actual += actual
+      unallocated.estimated += estimated
+      return
+    }
+    shares.forEach((share) => {
+      const entry = byGroup.get(share.groupId) ?? { actual: 0, estimated: 0 }
+      entry.actual += (actual * share.qty) / totalQty
+      entry.estimated += (estimated * share.qty) / totalQty
+      byGroup.set(share.groupId, entry)
+    })
+  }
+
+  stores.forEach((store) => {
+    const items = store.items.filter((item) => item.ingredient.trim())
+    const receipt = toMoney(store.receiptTotal)
+
+    if (receipt > 0) {
+      const weights = items.map((item) => toMoney(item.price) || estimateOf(item, store))
+      const weightSum = weights.reduce((sum, weight) => sum + weight, 0)
+      items.forEach((item, index) => {
+        const share = weightSum > 0 ? weights[index] / weightSum : 1 / items.length
+        add(item, receipt * share, 0)
+      })
+      if (items.length === 0) {
+        unallocated.actual += receipt
+      }
+      return
+    }
+
+    items.forEach((item) => {
+      const price = toMoney(item.price)
+      add(item, price, price > 0 ? 0 : estimateOf(item, store))
+    })
+  })
+
+  return { byGroup, unallocated }
+}
+
+// An ingredient belongs to one store. When copies exist (two admins assigning at the same moment),
+// keep the one with the most progress: purchased, then priced, then the first one.
+export const dedupeStoreItems = <Item extends StoreItemLike, Store extends StoreLike<Item>>(
+  stores: Store[],
+  keyOf: (name: string) => string,
+): Store[] => {
+  const rank = (item: Item) => (item.purchased ? 2 : 0) + (toMoney(item.price) ? 1 : 0)
+  const best = new Map<string, Item>()
+
+  stores.forEach((store) =>
+    store.items.forEach((item) => {
+      const key = keyOf(item.ingredient)
+      if (!key) {
+        return
+      }
+      const current = best.get(key)
+      if (!current || rank(item) > rank(current)) {
+        best.set(key, item)
+      }
+    }),
+  )
+
+  return stores.map((store) => ({
+    ...store,
+    items: store.items.filter((item) => {
+      const key = keyOf(item.ingredient)
+      return !key || best.get(key) === item
+    }),
+  }))
+}

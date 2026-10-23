@@ -20,6 +20,9 @@ export type IconName =
   | 'tag'
   | 'copy'
   | 'wallet'
+  | 'menu'
+  | 'history'
+  | 'globe'
 
 const PATHS: Record<IconName, string> = {
   chevron: 'M6 9l6 6 6-6',
@@ -43,6 +46,9 @@ const PATHS: Record<IconName, string> = {
   tag: 'M4 4h7l9 9-7 7-9-9zM8.5 8.5h.01',
   copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
   wallet: 'M4 7h15v12H4zM4 7l11-3v3M15 13h.01',
+  menu: 'M4 6h16M4 12h16M4 18h16',
+  history: 'M4 12a8 8 0 1 0 2.5-5.8L4 8.5M4 4v4.5h4.5M12 8v4l3 2',
+  globe: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z',
 }
 
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {

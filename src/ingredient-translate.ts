@@ -1,0 +1,186 @@
+// Ingredient names between Chinese and English, so groups can type either and summaries still add up.
+// The built-in dictionary covers the ingredient library; anything else is machine-translated once and
+// saved in the shared data ("learned" translations), where admins can correct it.
+
+// Chinese (as in the ingredient library) -> English.
+export const BUILTIN_ZH_EN: Record<string, string> = {
+  洋蔥: 'Onion', 青蔥: 'Green onion', 蒜頭: 'Garlic', 薑: 'Ginger', 南薑: 'Galangal', 黃薑: 'Turmeric',
+  大白菜: 'Napa cabbage', 高麗菜: 'Cabbage', 青江菜: 'Bok choy', 小白菜: 'Baby bok choy', 萵苣: 'Lettuce',
+  菠菜: 'Spinach', 美生菜: 'Iceberg lettuce', 芹菜: 'Chinese celery', 西洋芹: 'Celery', 碧玉筍: 'Green bamboo shoot',
+  玉米筍: 'Baby corn', 櫛瓜: 'Zucchini', 小黃瓜: 'Cucumber', 茄子: 'Eggplant', 花椰菜: 'Broccoli',
+  白花椰菜: 'Cauliflower', 馬鈴薯: 'Potato', 白蘿蔔: 'Daikon radish', 紅蘿蔔: 'Carrot', 地瓜: 'Sweet potato',
+  紅地瓜: 'Red sweet potato', 栗子南瓜: 'Kabocha squash', 南瓜: 'Pumpkin', 芋頭: 'Taro', 甜菜: 'Beetroot',
+  豆芽: 'Bean sprouts', 玉米粒: 'Corn kernels', 玉米: 'Corn', 番茄: 'Tomato', 番茄丁: 'Diced tomato',
+  牛番茄: 'Beefsteak tomato', 紅小番茄: 'Cherry tomato', 黃小番茄: 'Yellow cherry tomato', 小番茄: 'Cherry tomato',
+  青椒: 'Green bell pepper', 甜椒: 'Bell pepper', 黃椒: 'Yellow bell pepper', 紅椒: 'Red bell pepper',
+  大辣椒: 'Large chili', 辣椒: 'Chili pepper', 辣椒葉: 'Chili leaves', 四季豆: 'Green beans', 九層塔: 'Thai basil',
+  香菜: 'Cilantro', 迷迭香: 'Rosemary', 香茅: 'Lemongrass', 斑蘭葉: 'Pandan leaves',
+  蘑菇: 'Mushroom', 黑木耳: 'Wood ear mushroom', 金針菇: 'Enoki mushroom', 鴻喜菇: 'Shimeji mushroom',
+  黑鴻喜菇: 'Brown shimeji', 雪白菇: 'White shimeji', 秀珍菇: 'Oyster mushroom', 鮮香菇: 'Fresh shiitake',
+  乾香菇: 'Dried shiitake', 香菇: 'Shiitake mushroom', 杏鮑菇: 'King oyster mushroom', 猴頭菇: "Lion's mane mushroom",
+  乾猴頭菇: "Dried lion's mane", 太極菇: 'Taiji mushroom',
+  蘋果: 'Apple', 青蘋果: 'Green apple', 奇異果: 'Kiwi', 酪梨: 'Avocado', 柳丁: 'Orange', 橘子: 'Tangerine',
+  鳳梨: 'Pineapple', 哈密瓜: 'Cantaloupe', 火龍果: 'Dragon fruit', 紅火龍果: 'Red dragon fruit', 葡萄: 'Grape',
+  紫葡萄: 'Purple grape', 無子葡萄: 'Seedless grape', 藍莓: 'Blueberry', 石榴: 'Pomegranate', 檸檬: 'Lemon',
+  香蕉: 'Banana', 西瓜: 'Watermelon', 草莓: 'Strawberry', 芒果: 'Mango',
+  豆干: 'Dried tofu', 豆花: 'Tofu pudding', 嫩豆腐: 'Silken tofu', 板豆腐: 'Firm tofu', 百頁豆腐: 'Bai ye tofu',
+  凍豆腐: 'Frozen tofu', 火鍋用豆腐: 'Hot pot tofu', 油豆腐: 'Fried tofu', 三角油豆腐: 'Triangle fried tofu',
+  豆腐: 'Tofu', 麵腸: 'Wheat gluten roll', 素肉: 'Plant-based meat', Omnipork新豬肉: 'OmniPork',
+  素肉燥: 'Vegetarian minced sauce', 素火腿: 'Vegetarian ham', 素培根: 'Vegetarian bacon', 素熱狗: 'Vegetarian hot dog',
+  素鬆: 'Vegetarian floss', 小肉豆: 'Vegetarian meatballs', 火腿漿: 'Ham paste', 滷蛋: 'Braised egg',
+  雞蛋: 'Egg', 蛋黃: 'Egg yolk', 蛋白: 'Egg white', 牛奶: 'Milk', 鮮奶油: 'Whipping cream', 奶油: 'Butter',
+  無鹽奶油: 'Unsalted butter', 優格: 'Yogurt', 煉乳: 'Condensed milk', 起司: 'Cheese', 起司片: 'Cheese slice',
+  起司絲: 'Shredded cheese', 起司粉: 'Grated cheese', 切達起司: 'Cheddar cheese', 紅切達: 'Red cheddar',
+  莫札瑞拉起司: 'Mozzarella', 馬斯卡彭: 'Mascarpone', 奶油乳酪: 'Cream cheese',
+  白米: 'Rice', 糯米: 'Glutinous rice', 米粉: 'Rice vermicelli', 河粉: 'Rice noodles', 黃麵: 'Yellow noodles',
+  麵條: 'Noodles', 義大利麵條: 'Spaghetti', '義大利麵(斜管)': 'Penne', 寬扁義大利麵: 'Fettuccine', 通心粉: 'Macaroni',
+  墨西哥通心粉: 'Mexican macaroni', 王子麵: 'Instant noodle snack', 細黃油麵: 'Thin yellow noodles', 年糕: 'Rice cake',
+  薯餅: 'Hash brown', 薯條: 'French fries', 嫩油條: 'Fried dough stick', 甜不辣: 'Tempura fish cake (vegetarian)',
+  麵包: 'Bread', 法國麵包: 'Baguette', 白吐司: 'White bread', 吐司塊: 'Bread cubes', 鬆餅粉: 'Pancake mix',
+  起酥片: 'Puff pastry', 米紙: 'Rice paper', 海苔片: 'Seaweed sheet', pappadam餅: 'Pappadam', 西米: 'Sago',
+  麵粉: 'Flour', 中筋麵粉: 'All-purpose flour', 低筋麵粉: 'Cake flour', 高筋麵粉: 'Bread flour', 玉米粉: 'Cornstarch',
+  玉米澱粉: 'Cornstarch', 太白粉: 'Potato starch', 地瓜粉: 'Sweet potato starch', 樹薯粉: 'Tapioca starch',
+  糯米粉: 'Glutinous rice flour', 豆花粉: 'Tofu pudding powder', 酥炸粉: 'Frying batter mix', 素吉利丁: 'Vegetarian gelatin',
+  可可粉: 'Cocoa powder', 巧克力粉: 'Chocolate powder', 巧克力豆: 'Chocolate chips', 糖粉: 'Powdered sugar',
+  泡打粉: 'Baking powder', 小蘇打粉: 'Baking soda', 酵母粉: 'Yeast',
+  花生: 'Peanut', 花生米: 'Peanut kernels', 花生粉: 'Peanut powder', 芝麻: 'Sesame', 白芝麻: 'White sesame',
+  去皮白芝麻: 'Hulled white sesame', 去皮黑芝麻: 'Hulled black sesame', 芝麻粉: 'Sesame powder', 核桃: 'Walnut',
+  果乾: 'Dried fruit', 紅豆: 'Red bean', 綠豆: 'Mung bean', 紅豆餡: 'Red bean paste', 花生餡: 'Peanut filling',
+  芋頭餡: 'Taro paste', 芝麻餡: 'Sesame filling', 杏仁: 'Almond',
+  醬油: 'Soy sauce', 清醬油: 'Light soy sauce', 昆布醬油: 'Kombu soy sauce', 醬油膏: 'Thick soy sauce',
+  番茄醬: 'Ketchup', 番茄罐頭: 'Canned tomatoes', 沙拉醬: 'Salad dressing', 美乃滋: 'Mayonnaise', 白醋: 'White vinegar',
+  壽司醋: 'Sushi vinegar', 酸瓜: 'Pickled cucumber', 味噌: 'Miso', 辣豆瓣: 'Spicy bean paste', 豆瓣醬: 'Bean paste',
+  豆豉辣椒醬: 'Black bean chili sauce', 韓式辣醬: 'Gochujang', 春醬: 'Chunjang', 芝麻醬: 'Sesame paste',
+  胡麻醬: 'Roasted sesame dressing', 芥末醬: 'Mustard', 素蠔油: 'Vegetarian oyster sauce', 辣油: 'Chili oil',
+  羅望子: 'Tamarind', 泡菜: 'Kimchi', 濃湯粉: 'Soup powder', 蠔油: 'Oyster sauce',
+  鹽: 'Salt', 胡椒鹽: 'Pepper salt', 黑胡椒: 'Black pepper', 黑胡椒粒: 'Black peppercorns', 黑胡椒粉: 'Ground black pepper',
+  白胡椒粉: 'White pepper', 胡椒粉: 'Ground pepper', 辣椒粉: 'Chili powder', 辣椒乾: 'Dried chili', 紅椒粉: 'Paprika',
+  小茴香: 'Cumin', 八角: 'Star anise', 桂皮: 'Cinnamon bark', 肉桂粉: 'Cinnamon powder', 香葉: 'Bay leaf',
+  香料包: 'Spice bag', 義式香料: 'Italian seasoning', 南薑粉: 'Galangal powder', 黃薑粉: 'Turmeric powder',
+  伯爵茶包: 'Earl Grey tea bag', 紅茶葉: 'Black tea leaves', 決明子: 'Cassia seed', 咖喱: 'Curry', 東南亞咖喱: 'Southeast Asian curry',
+  砂糖: 'Sugar', 細砂糖: 'Caster sugar', 二號砂糖: 'Brown sugar (light)', 冰糖: 'Rock sugar', 黑糖: 'Brown sugar',
+  焦糖液: 'Caramel syrup', 巧克力: 'Chocolate', 芋園: 'Taro balls', 麗滋起司餅乾: 'Ritz cheese crackers', 燕麥餅乾: 'Oat cookies',
+  蜂蜜: 'Honey', 楓糖漿: 'Maple syrup',
+  食用油: 'Cooking oil', 橄欖油: 'Olive oil', 玄米油: 'Rice bran oil', 椰子油: 'Coconut oil', 麻油: 'Sesame oil', 香油: 'Sesame oil',
+  米酒: 'Rice wine', 檸檬汁: 'Lemon juice', 燕麥奶: 'Oat milk', 無糖豆奶: 'Unsweetened soy milk', 豆漿: 'Soy milk',
+  椰奶: 'Coconut milk', 味精: 'MSG', 乾海帶: 'Dried kelp', 乾昆布: 'Dried kombu', 玉米罐頭: 'Canned corn',
+  冰塊: 'Ice', 水: 'Water', 鮪魚罐頭: 'Canned tuna', 吉利丁: 'Gelatin', 吉利丁粉: 'Gelatin powder', 牛油: 'Beef tallow',
+}
+
+// Extra English spellings that should land on a Chinese name.
+const EXTRA_EN_ZH: Record<string, string> = {
+  tomato: '番茄', 'roma tomato': '番茄', 'cherry tomato': '紅小番茄', eggs: '雞蛋', 'whole egg': '雞蛋',
+  scallion: '青蔥', 'spring onion': '青蔥', 'green onions': '青蔥', 'bok choi': '青江菜', 'pak choi': '青江菜',
+  'chinese cabbage': '大白菜', 'green cabbage': '高麗菜', 'cabbage head': '高麗菜', aubergine: '茄子', courgette: '櫛瓜',
+  capsicum: '甜椒', 'red pepper': '紅椒', 'green pepper': '青椒', 'yellow pepper': '黃椒', chilli: '辣椒', chili: '辣椒',
+  coriander: '香菜', basil: '九層塔', shiitake: '鮮香菇', enoki: '金針菇', 'king oyster': '杏鮑菇', 'oyster mushroom': '秀珍菇',
+  'sweet potato': '地瓜', yam: '地瓜', 'spring roll wrapper': '米紙', 'heavy cream': '鮮奶油', cream: '鮮奶油',
+  'whipped cream': '鮮奶油', 'double cream': '鮮奶油', 'shredded mozzarella': '起司絲', mozzarella: '起司絲',
+  'sliced cheese': '起司片', parmesan: '起司粉', cheddar: '切達起司', 'greek yogurt': '優格', yoghurt: '優格',
+  'white rice': '白米', 'jasmine rice': '白米', 'sticky rice': '糯米', pasta: '義大利麵條', 'plain flour': '中筋麵粉',
+  'all purpose flour': '中筋麵粉', 'low gluten flour': '低筋麵粉', 'corn starch': '玉米粉', 'corn flour': '玉米粉',
+  'starch': '太白粉', 'white sugar': '砂糖', 'granulated sugar': '砂糖', 'icing sugar': '糖粉', 'soya sauce': '醬油',
+  'sea salt': '鹽', 'table salt': '鹽', pepper: '胡椒粉', 'vegetable oil': '食用油', oil: '食用油', 'salad oil': '食用油',
+  'extra virgin olive oil': '橄欖油', 'peanuts': '花生', 'sesame seeds': '白芝麻', 'red beans': '紅豆', 'azuki beans': '紅豆',
+  'mung beans': '綠豆', 'soy milk': '豆漿', 'soymilk': '豆漿', 'coconut cream': '椰奶', ice: '冰塊', 'ice cubes': '冰塊',
+  'firm tofu': '板豆腐', 'soft tofu': '嫩豆腐', 'dried tofu': '豆干', 'bean curd': '豆腐', 'seaweed': '海苔片', nori: '海苔片',
+  'curry powder': '咖喱', 'curry cubes': '咖喱', 'cocoa': '可可粉', 'chocolate chip': '巧克力豆', 'cinnamon': '肉桂粉',
+}
+
+const CJK = /[㐀-鿿]/
+
+export const isEnglishName = (name: string): boolean => /[a-z]/i.test(name) && !CJK.test(name)
+export const isChineseName = (name: string): boolean => CJK.test(name)
+
+export const normalizeEnglish = (name: string): string =>
+  name
+    .toLowerCase()
+    .replace(/[_,.;:!()[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const singular = (word: string): string => {
+  if (/ies$/.test(word)) return word.replace(/ies$/, 'y')
+  if (/(oes|ches|shes|xes|sses)$/.test(word)) return word.replace(/es$/, '')
+  if (/[^s]s$/.test(word)) return word.slice(0, -1)
+  return word
+}
+
+const DESCRIPTORS = /^(fresh|organic|large|small|medium|whole|raw|chopped|sliced|diced|minced|ground|frozen|dried|baby)\s+/
+
+const EN_ZH: Record<string, string> = (() => {
+  const map: Record<string, string> = {}
+  Object.entries(BUILTIN_ZH_EN).forEach(([zh, en]) => {
+    const key = normalizeEnglish(en)
+    if (!map[key]) map[key] = zh
+  })
+  Object.entries(EXTRA_EN_ZH).forEach(([en, zh]) => {
+    map[normalizeEnglish(en)] = zh
+  })
+  // "Dragonfruit" should find "dragon fruit": also index each multi-word name without spaces.
+  Object.entries({ ...map }).forEach(([key, zh]) => {
+    const compact = key.replace(/ /g, '')
+    if (!map[compact]) map[compact] = zh
+  })
+  return map
+})()
+
+// Learned translations are stored under "en:<normalized English>" and "zh:<normalized Chinese>".
+export const learnedKey = (name: string): string =>
+  isEnglishName(name) ? `en:${normalizeEnglish(name)}` : `zh:${name.replace(/\s+/g, '').toLowerCase()}`
+
+// English -> Chinese: learned first (admins can correct), then the dictionary with simple plural and
+// "fresh/diced/…" handling. Returns null when unknown.
+export const englishToChinese = (name: string, learned: Record<string, string>): string | null => {
+  const base = normalizeEnglish(name)
+  if (!base) return null
+  const candidates = [base, base.split(' ').map(singular).join(' ')]
+  const stripped = base.replace(DESCRIPTORS, '')
+  if (stripped !== base) candidates.push(stripped, stripped.split(' ').map(singular).join(' '))
+  for (const candidate of candidates) {
+    const hit = learned[`en:${candidate}`] ?? EN_ZH[candidate] ?? EN_ZH[candidate.replace(/ /g, '')]
+    if (hit) return hit
+  }
+  return null
+}
+
+// Chinese -> English: learned first, then the dictionary, then the English name someone typed that was
+// translated into this Chinese name (so it stays readable in English mode). Returns null when unknown.
+export const chineseToEnglish = (name: string, learned: Record<string, string>): string | null => {
+  const compact = name.replace(/\s+/g, '')
+  const direct = learned[`zh:${compact.toLowerCase()}`] ?? BUILTIN_ZH_EN[compact]
+  if (direct) return direct
+  const typed = Object.keys(learned).find((key) => key.startsWith('en:') && learned[key] === compact)
+  return typed ? typed.charAt(3).toUpperCase() + typed.slice(4) : null
+}
+
+// Machine-translation result cleanup: one line, no trailing punctuation, sensible capitalization.
+export const cleanMachineTranslation = (source: string, result: string, toEnglish: boolean): string | null => {
+  const text = result.split(/\r?\n/)[0].replace(/[。．.、,，!！?？]+$/g, '').trim()
+  if (!text || text.length > 40 || /MYMEMORY|QUERY LENGTH|INVALID/i.test(text)) return null
+  if (normalizeEnglish(text) === normalizeEnglish(source)) return null
+  if (toEnglish) {
+    if (CJK.test(text)) return null
+    return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase()
+  }
+  return CJK.test(text) ? text.replace(/\s+/g, '') : null
+}
+
+// Amounts in English mode: "3顆" -> "3 pcs", "1.5 公斤" -> "1.5 kg", "適量" -> "as needed".
+const UNIT_EN: Array<[string, string]> = [
+  ['公斤', 'kg'], ['千克', 'kg'], ['公克', 'g'], ['毫升', 'ml'], ['公升', 'L'], ['大匙', 'tbsp'], ['湯匙', 'tbsp'],
+  ['小匙', 'tsp'], ['茶匙', 'tsp'], ['台斤', 'jin'], ['顆', 'pcs'], ['個', 'pcs'], ['粒', 'pcs'], ['入', 'pcs'],
+  ['條', 'pcs'], ['根', 'pcs'], ['支', 'pcs'], ['把', 'bunch'], ['束', 'bunch'], ['包', 'pack'], ['袋', 'bag'],
+  ['片', 'slices'], ['張', 'sheets'], ['盒', 'box'], ['瓶', 'bottle'], ['罐', 'can'], ['塊', 'block'], ['杯', 'cup'],
+  ['碗', 'bowl'], ['克', 'g'], ['斤', 'jin'], ['兩', 'liang'], ['升', 'L'],
+]
+const UNIT_EN_MAP = new Map(UNIT_EN)
+const AMOUNT_UNIT = new RegExp(String.raw`(\d[\d.,/]*)\s*(${UNIT_EN.map(([zh]) => zh).join('|')})`, 'g')
+
+export const amountToEnglish = (text: string): string =>
+  text
+    .replace(AMOUNT_UNIT, (_match, qty: string, unit: string) => `${qty} ${UNIT_EN_MAP.get(unit)}`)
+    .replace(/適量/g, 'as needed')
+    .replace(/少許/g, 'a little')
+
+export const unitToEnglish = (unit: string): string => UNIT_EN_MAP.get(unit.trim()) ?? unit

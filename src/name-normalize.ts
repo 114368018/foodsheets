@@ -127,23 +127,23 @@ export type UnitInfo = {
 }
 
 const UNIT_TABLE: Array<[string[], string, number, UnitInfo['dimension']]> = [
-  [['g', 'gram', 'grams', '克', '公克'], 'g', 1, 'weight'],
-  [['kg', '公斤', '千克'], 'g', 1000, 'weight'],
+  [['g', 'gram', 'grams', 'gm', '克', '公克'], 'g', 1, 'weight'],
+  [['kg', 'kgs', 'kilogram', 'kilograms', '公斤', '千克'], 'g', 1000, 'weight'],
   [['斤', '台斤'], 'g', 600, 'weight'],
   [['兩'], 'g', 37.5, 'weight'],
-  [['ml', 'cc', 'c.c.', '毫升', '西西'], 'ml', 1, 'volume'],
-  [['l', '公升', '升'], 'ml', 1000, 'volume'],
-  [['大匙', '湯匙', 'tbsp'], 'ml', 15, 'volume'],
-  [['小匙', '茶匙', 'tsp'], 'ml', 5, 'volume'],
-  [['顆', '個', '粒', '入'], '顆', 1, 'count'],
+  [['ml', 'cc', 'c.c.', 'milliliter', 'milliliters', 'millilitre', 'millilitres', '毫升', '西西'], 'ml', 1, 'volume'],
+  [['l', 'liter', 'liters', 'litre', 'litres', '公升', '升'], 'ml', 1000, 'volume'],
+  [['大匙', '湯匙', 'tbsp', 'tablespoon', 'tablespoons'], 'ml', 15, 'volume'],
+  [['小匙', '茶匙', 'tsp', 'teaspoon', 'teaspoons'], 'ml', 5, 'volume'],
+  [['顆', '個', '粒', '入', 'pc', 'pcs', 'piece', 'pieces', 'ea', 'each'], '顆', 1, 'count'],
   [['條', '根'], '條', 1, 'count'],
-  [['包', '袋'], '包', 1, 'count'],
-  [['片'], '片', 1, 'count'],
-  [['盒'], '盒', 1, 'count'],
-  [['瓶'], '瓶', 1, 'count'],
-  [['罐'], '罐', 1, 'count'],
-  [['塊'], '塊', 1, 'count'],
-  [['把', '束'], '把', 1, 'count'],
+  [['包', '袋', 'pack', 'packs', 'bag', 'bags'], '包', 1, 'count'],
+  [['片', 'slice', 'slices', 'sheet', 'sheets'], '片', 1, 'count'],
+  [['盒', 'box', 'boxes', 'carton', 'cartons'], '盒', 1, 'count'],
+  [['瓶', 'bottle', 'bottles'], '瓶', 1, 'count'],
+  [['罐', 'can', 'cans', 'jar', 'jars'], '罐', 1, 'count'],
+  [['塊', 'block', 'blocks'], '塊', 1, 'count'],
+  [['把', '束', 'bunch', 'bunches'], '把', 1, 'count'],
 ]
 
 const UNIT_LOOKUP = new Map(
