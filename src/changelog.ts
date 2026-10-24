@@ -6,6 +6,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG_ENTRIES: ChangelogEntry[] = [
   {
+    version: 'v2.7.2',
+    date: '2026-10-25',
+    changes: [
+      '英文模式補齊翻譯：範例組、採買清單與食材庫／工具庫的名稱也會自動翻譯（之前只翻各組）；組合名稱會依組成翻譯，例如 木鍋鏟→Wooden turner、中型碗→Medium bowl、紙碗→Paper bowl、冷凍玉米粒→Frozen corn kernels。食材庫／工具庫與輸入建議在英文模式也會顯示英文。',
+      '價格參考的全聯價格改用「全聯小時達」實際售價（29 項，例如 洗選蛋 10 入 $54、光泉鮮乳 936ml $88、台糖細砂 1kg $36），並連到小時達商品頁，每天早上自動更新；管理員改過或刪掉的價格不會被覆蓋。',
+      '價格參考的全聯「找商品」連結改到小時達搜尋，也可以貼小時達商品網址；同一個商品網址只會抓一次。',
+    ],
+  },  {
     version: 'v2.7.1',
     date: '2026-10-24',
     changes: [

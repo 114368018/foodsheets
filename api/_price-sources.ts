@@ -8,6 +8,7 @@
 export const PRODUCE_API = 'https://data.moa.gov.tw/Service/OpenData/FromM/FarmTransData.aspx'
 // Supported shops: host + product page path.
 export const PRODUCT_PAGES = [
+  { host: 'shop.pxgo.com.tw', path: /^\/hourArrive\/goods\/[\w-]+\/?$/ },
   { host: 'pxbox.es.pxmart.com.tw', path: /^\/product\/\d+\/?$/ },
   { host: 'online.uni-prosperity.com.tw', path: /^\/zh\/[^/]+\/[A-Z0-9]{8,}\.html$/ },
 ]

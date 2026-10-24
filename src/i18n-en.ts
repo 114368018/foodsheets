@@ -104,7 +104,7 @@ export const EN: Record<string, string> = {
   '全部組別料理': 'All groups\' dishes',
   '全部都已分配': 'Everything is assigned',
   '全聯': 'PX Mart',
-  '全聯、萬家福：在下表貼上「全聯全電商」或「萬家福線上購物」的商品網址，每天會自動抓該商品的售價。': 'PX Mart, Uni-Prosperity: paste a PX Mart online-shop or Uni-Prosperity online-shopping product URL in the table below and its price is fetched every day.',
+  '全聯、萬家福：在下表貼上「全聯小時達」（或全聯全電商）、「萬家福線上購物」的商品網址，每天會自動抓該商品的售價。': 'PX Mart, Uni-Prosperity: paste a PX Mart Hour Delivery (or PX Mart online shop) or Uni-Prosperity online-shopping product URL in the table below and its price is fetched every day.',
   '全聯：在下表貼上「全聯全電商」的商品網址，每天會自動抓該商品的售價。': 'PX Mart: paste a PX Mart online-shop product URL in the table below and its price is fetched every day.',
   '全聯全電商商品網址': 'PX Mart online product URL',
   '全聯商品網址（自動更新）': 'PX Mart product URL (auto update)',

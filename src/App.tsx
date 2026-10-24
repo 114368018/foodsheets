@@ -345,11 +345,12 @@ const normalizeMarketPrices = (raw: Record<string, unknown>): MarketPrices => ({
 
 // Where to look a product up, per shop that supports automatic prices.
 const PRODUCT_SHOPS: Partial<Record<StoreKind, { search: string; example: string }>> = {
-  全聯: { search: 'https://pxbox.es.pxmart.com.tw/search/result?keyword=', example: 'https://pxbox.es.pxmart.com.tw/product/…' },
+  全聯: { search: 'https://shop.pxgo.com.tw/hourArrive/search/result?q=', example: 'https://shop.pxgo.com.tw/hourArrive/goods/…' },
   萬家福: { search: 'https://online.uni-prosperity.com.tw/zh/search?q=', example: 'https://online.uni-prosperity.com.tw/zh/…/….html' },
 }
 
 const isProductLink = (value: string): boolean =>
+  /^https:\/\/shop\.pxgo\.com\.tw\/hourArrive\/goods\/[\w-]+\/?$/.test(value.trim()) ||
   /^https:\/\/pxbox\.es\.pxmart\.com\.tw\/product\/\d+\/?$/.test(value.trim()) ||
   /^https:\/\/online\.uni-prosperity\.com\.tw\/zh\/[^/]+\/[A-Z0-9]{8,}\.html$/.test(value.trim())
 
@@ -886,8 +887,19 @@ const normalizePriceBook = (rawBook: unknown, rawApplied: unknown): { priceBook:
     if (applied.has(batch.id)) {
       return
     }
-    const existingIds = new Set(priceBook.map((entry) => entry.id))
-    priceBook = [...priceBook, ...batch.entries.filter((entry) => !existingIds.has(entry.id))]
+    if (batch.replaces) {
+      // Only starting entries nobody has edited (no updatedAt) or deleted are updated.
+      const replacements = new Map(batch.entries.map((entry) => [entry.id, entry]))
+      priceBook = priceBook.map((entry) => {
+        const replacement = replacements.get(entry.id)
+        const untouched =
+          replacement && !entry.updatedAt && entry.ingredient === replacement.ingredient && entry.store === replacement.store
+        return untouched ? replacement : entry
+      })
+    } else {
+      const existingIds = new Set(priceBook.map((entry) => entry.id))
+      priceBook = [...priceBook, ...batch.entries.filter((entry) => !existingIds.has(entry.id))]
+    }
     applied.add(batch.id)
   })
 
@@ -1925,7 +1937,7 @@ function App() {
   }, [ingredientSummaryRows])
 
   // Prices used for suggestions and estimates:
-  // - entries linked to a 全聯全電商 product take the price fetched this morning;
+  // - entries linked to a 全聯 (小時達／全電商) or 萬家福 product take the price fetched this morning;
   // - market produce takes today's wholesale-based price unless an admin entered one by hand;
   // - produce the list doesn't have yet is added from the market data.
   const effectivePriceBook = useMemo<PriceEntry[]>(() => {
@@ -3023,16 +3035,22 @@ function App() {
       return lang === 'en' && isChineseName(display) && !translator.toEnglish(display, nameTranslations) ? display : null
     }
     const names = new Set<string>()
-    nonSampleGroupIds.forEach((groupId) => {
-      groupData[groupId].ingredientRows.forEach((row) => {
-        const name = row.ingredient.trim() && untranslated(row.ingredient.trim(), INGREDIENT_TRANSLATOR, resolveIngredientName, ingredientAliases)
-        if (name) names.add(name)
-      })
-      groupData[groupId].toolRows.forEach((row) => {
-        const name = row.tool.trim() && untranslated(row.tool.trim(), TOOL_TRANSLATOR, resolveToolName, toolAliases)
-        if (name) names.add(name)
-      })
+    const addIngredient = (raw: string) => {
+      const name = raw.trim() && untranslated(raw.trim(), INGREDIENT_TRANSLATOR, resolveIngredientName, ingredientAliases)
+      if (name) names.add(name)
+    }
+    const addTool = (raw: string) => {
+      const name = raw.trim() && untranslated(raw.trim(), TOOL_TRANSLATOR, resolveToolName, toolAliases)
+      if (name) names.add(name)
+    }
+    // Every name someone can see: all groups (範例組 too), shopping lists, and the libraries.
+    groupOrder.forEach((groupId) => {
+      groupData[groupId]?.ingredientRows.forEach((row) => addIngredient(row.ingredient))
+      groupData[groupId]?.toolRows.forEach((row) => addTool(row.tool))
     })
+    shoppingStores.forEach((store) => store.items.forEach((item) => addIngredient(item.ingredient)))
+    ingredientLibrary.forEach(addIngredient)
+    toolLibrary.forEach(addTool)
 
     const pending = Array.from(names)
       .filter((name) => !translationsInFlightRef.current.has(learnedKey(name)))
@@ -3071,7 +3089,7 @@ function App() {
     }, 1500)
 
     return () => window.clearTimeout(timer)
-  }, [groupData, ingredientAliases, lang, nameTranslations, nonSampleGroupIds, toolAliases])
+  }, [groupData, groupOrder, ingredientAliases, ingredientLibrary, lang, nameTranslations, shoppingStores, toolAliases, toolLibrary])
 
   // Push unsynced edits. The transaction merges them onto the latest cloud state,
   // so concurrent edits from other groups are never overwritten.
@@ -4202,13 +4220,13 @@ function App() {
 
         <datalist id="ingredient-library-options">
           {ingredientLibrary.map((name) => (
-            <option key={name} value={name} />
+            <option key={name} value={name} label={lang === 'en' ? ingredientLabel(name) : undefined} />
           ))}
         </datalist>
 
         <datalist id="tool-library-options">
           {toolLibrary.map((name) => (
-            <option key={name} value={name} />
+            <option key={name} value={name} label={lang === 'en' ? toolLabel(name) : undefined} />
           ))}
         </datalist>
 
@@ -5074,6 +5092,7 @@ function App() {
                   {toolLibrary.map((name) => (
                     <li key={name} className="tag">
                       {name}
+                      {lang === 'en' && !sameName(toolLabel(name), name) && <span className="tag-translation">{toolLabel(name)}</span>}
                       <button
                         type="button"
                         className="tag-remove"
@@ -5122,6 +5141,9 @@ function App() {
                   {ingredientLibrary.map((name) => (
                     <li key={name} className="tag">
                       {name}
+                      {lang === 'en' && !sameName(ingredientLabel(name), name) && (
+                        <span className="tag-translation">{ingredientLabel(name)}</span>
+                      )}
                       <button
                         type="button"
                         className="tag-remove"
@@ -5922,7 +5944,7 @@ function App() {
               </div>
               <ul className="price-status-notes">
                 <li>{t('菜市場：依農業部農產品批發行情（各市場成交量加權平均）× 1.6 估算零售價；你手動改過的價格不會被覆蓋。')}</li>
-                <li>{t('全聯、萬家福：在下表貼上「全聯全電商」或「萬家福線上購物」的商品網址，每天會自動抓該商品的售價。')}</li>
+                <li>{t('全聯、萬家福：在下表貼上「全聯小時達」（或全聯全電商）、「萬家福線上購物」的商品網址，每天會自動抓該商品的售價。')}</li>
               </ul>
               {priceUpdateMessage && <p className="field-hint">{priceUpdateMessage}</p>}
               {marketPrices && marketPrices.errors.length > 0 && (

@@ -64,3 +64,11 @@ test('萬家福 product pages and URLs', () => {
   assert.equal(isProductUrl('https://online.uni-prosperity.com.tw/zh/search?q=蛋'), false)
   assert.equal(isProductUrl('https://online.uni-prosperity.com.tw/on/demandware.store/x.html'), false)
 })
+
+test('全聯小時達 product URLs', () => {
+  assert.equal(isProductUrl('https://shop.pxgo.com.tw/hourArrive/goods/246809-37010023-4710679240152'), true)
+  assert.equal(isProductUrl('https://shop.pxgo.com.tw/hourArrive/search/result?q=蛋'), false)
+  assert.equal(isProductUrl('https://shop.pxgo.com.tw/hourArrive/member/orders'), false)
+  const html = `<script type="application/ld+json">{"@context":"https://schema.org","@type":"Product","name":"阿薩姆茶葉蛋 350g","offers":{"@type":"Offer","availability":"https://schema.org/InStock","price":65,"priceCurrency":"TWD"}}</script>`
+  assert.deepEqual(parseProductPrice(html), { price: 65, name: '阿薩姆茶葉蛋 350g', inStock: true })
+})

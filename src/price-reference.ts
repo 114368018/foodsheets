@@ -126,6 +126,41 @@ const UNI_PROSPERITY_SEED: SeedRow[] = [
   ['可可粉', '萬家福', 229, 100, 'g', '100g', undefined, 'https://online.uni-prosperity.com.tw/zh/%E9%9C%B2%E7%89%B9/G423008526301.html'],
 ]
 
+// 全聯小時達 products, looked up 2026-10-25. They replace the estimated 全聯 prices above (same entry ids)
+// in projects where nobody has edited those entries, and are linked to their product pages so the daily
+// update keeps the price current.
+const PXGO_HOUR_SEED: SeedRow[] = [
+  ['雞蛋', '全聯', 54, 10, '顆', '小時達 洗選蛋 10 入', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/246809-37010023-4710679240152'],
+  ['牛奶', '全聯', 88, 936, 'ml', '小時達 光泉鮮乳 936ml', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/254626-20533905-4710105010113'],
+  ['鮮奶', '全聯', 88, 936, 'ml', '小時達 光泉鮮乳 936ml', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/254626-20533905-4710105010113'],
+  ['無鹽奶油', '全聯', 118, 200, 'g', '小時達 安博格 200g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/254985-21020255-5701215045767'],
+  ['奶油', '全聯', 118, 200, 'g', '小時達 安博格無鹽 200g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/254985-21020255-5701215045767'],
+  ['鮮奶油', '全聯', 109, 200, 'ml', '小時達 安博格動物性 200ml', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/241402-21020333-5701215046375'],
+  ['起司片', '全聯', 95, 10, '片', '小時達 總統牌 10 片 200g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/237437-21250047-3228020490329'],
+  ['起司絲', '全聯', 149, 300, 'g', '小時達 安佳披薩用 300g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/247112-21020154-4719565112511'],
+  ['優格', '全聯', 88, 500, 'g', '小時達 希臘式無糖 500g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/254752-31050002-4710784965544'],
+  ['高麗菜', '全聯', 85, 1, '顆', '小時達 1kg，約 1 顆', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/417051-110486-2611048614319'],
+  ['牛番茄', '全聯', 79, 2, '顆', '小時達 300g，約 2 顆', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/417349-115054-2611505414315'],
+  ['紅蘿蔔', '全聯', 45, 3, '條', '小時達 600g，約 3 條', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/417059-115024-2611502414318'],
+  ['馬鈴薯', '全聯', 49, 3, '顆', '小時達 450g，約 3 顆', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/416975-110283-2611028314314'],
+  ['板豆腐', '全聯', 20, 1, '盒', '小時達 義美 300g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/242286-21040061-4710126095540'],
+  ['嫩豆腐', '全聯', 15, 1, '盒', '小時達 中華 300g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/243658-21420222-4710583110046'],
+  ['白米', '全聯', 149, 1.5, 'kg', '小時達 一等米 1.5kg', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/240551-03010057-4712977661400'],
+  ['義大利麵條', '全聯', 49, 500, 'g', '小時達 直條 500g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/685145-23040600-5201013020107'],
+  ['中筋麵粉', '全聯', 56, 1, 'kg', '小時達 義峰 1kg', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/239981-26410010-4712586002014'],
+  ['低筋麵粉', '全聯', 56, 1, 'kg', '小時達 義峰 1kg', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/239983-26410063-4712586002052'],
+  ['麵粉', '全聯', 56, 1, 'kg', '小時達 義峰中筋 1kg', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/239981-26410010-4712586002014'],
+  ['砂糖', '全聯', 36, 1, 'kg', '小時達 台糖 1kg', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/238961-20337727-4710311107102'],
+  ['細砂糖', '全聯', 36, 1, 'kg', '小時達 台糖 1kg', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/238961-20337727-4710311107102'],
+  ['鹽', '全聯', 23, 1, 'kg', '小時達 台鹽 1kg', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/253626-51220014-4711271017814'],
+  ['醬油', '全聯', 75, 1000, 'ml', '小時達 萬家香 1000ml', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/236768-51410046-074261041249'],
+  ['番茄醬', '全聯', 85, 700, 'g', '小時達 可果美 700g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/244688-20158024-4710134023214'],
+  ['食用油', '全聯', 230, 2, 'l', '小時達 葵花油 2L', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/237722-20120685-4710043552065'],
+  ['玉米罐頭', '全聯', 28, 1, '罐', '小時達 340g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/248863-16110009-4710320151141'],
+  ['白吐司', '全聯', 45, 1, '條', '小時達 一條 850g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/419871-760548-2676054814313'],
+  ['太白粉', '全聯', 22, 300, 'g', '小時達 台糖 300g', undefined, 'https://shop.pxgo.com.tw/hourArrive/goods/239261-26410077-4710311993415'],
+]
+
 const toEntries = (rows: SeedRow[], firstId: number): PriceEntry[] =>
   rows.map(([ingredient, store, price, packQty, packUnit, spec, loose, sourceUrl], index) => ({
     id: firstId + index,
@@ -139,8 +174,17 @@ const toEntries = (rows: SeedRow[], firstId: number): PriceEntry[] =>
     ...(sourceUrl ? { sourceUrl } : {}),
   }))
 
+// The id of the starting entry for this ingredient at this store, so a later batch can replace it.
+const seedId = (ingredient: string, store: string): number => SEED.findIndex((row) => row[0] === ingredient && row[1] === store) + 1
+
 // Starting price lists, applied once per project (an admin deleting entries later is respected).
-export const PRICE_SEED_BATCHES: Array<{ id: string; entries: PriceEntry[] }> = [
+// A batch with `replaces` updates existing starting entries instead of adding new ones.
+export const PRICE_SEED_BATCHES: Array<{ id: string; entries: PriceEntry[]; replaces?: boolean }> = [
   { id: 'base-2026-10', entries: toEntries(SEED, 1) },
   { id: 'uni-prosperity-2026-10', entries: toEntries(UNI_PROSPERITY_SEED, 1001) },
+  {
+    id: 'pxgo-hour-2026-10',
+    entries: PXGO_HOUR_SEED.map((row) => toEntries([row], seedId(row[0], row[1]))[0]),
+    replaces: true,
+  },
 ]

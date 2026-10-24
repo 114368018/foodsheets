@@ -83,3 +83,18 @@ test('tools between English and Chinese', () => {
   assert.equal(toolChineseToEnglish('平底鍋', {}), 'Frying pan')
   assert.equal(toolChineseToEnglish('奇怪的鍋', { 'en:weird pot': '奇怪的鍋' }), 'Weird pot')
 })
+
+test('names put together from known parts', () => {
+  assert.equal(toolChineseToEnglish('木鍋鏟', {}), 'Wooden turner')
+  assert.equal(toolChineseToEnglish('中型碗', {}), 'Medium bowl')
+  assert.equal(toolChineseToEnglish('紙碗', {}), 'Paper bowl')
+  assert.equal(toolChineseToEnglish('瓷鍋', {}), 'Ceramic pot')
+  assert.equal(toolChineseToEnglish('大型不鏽鋼盆', {}), 'Large stainless steel basin')
+  assert.equal(toolChineseToEnglish('免洗筷', {}), 'Disposable chopsticks')
+  assert.equal(chineseToEnglish('冷凍玉米粒', {}), `Frozen ${chineseToEnglish('玉米粒', {})?.toLowerCase()}`)
+  assert.equal(chineseToEnglish('紅糖', {}), 'Brown sugar')
+  assert.equal(chineseToEnglish('芒果汁', {}), 'Mango juice')
+  assert.equal(chineseToEnglish('完全不認識', {}), null)
+  // learned (admin-corrected) parts are used too
+  assert.equal(toolChineseToEnglish('小怪鍋', { 'zh:怪鍋': 'Odd pot' }), 'Small odd pot')
+})

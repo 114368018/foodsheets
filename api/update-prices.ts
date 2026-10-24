@@ -111,21 +111,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     const products: Record<string, { price: number; name: string; inStock: boolean; fetchedAt: string; url: string }> = {}
-    // A few pages at a time keeps this polite and well within the time limit.
-    for (let index = 0; index < linked.length; index += 4) {
+    // Each product page is fetched once even when several entries link to it (牛奶 and 鮮奶). A few
+    // pages at a time keeps this polite and well within the time limit.
+    const entriesByUrl = new Map<string, typeof linked>()
+    linked.forEach((entry) => {
+      const url = String(entry.sourceUrl)
+      entriesByUrl.set(url, [...(entriesByUrl.get(url) ?? []), entry])
+    })
+    const urls = Array.from(entriesByUrl.keys())
+    for (let index = 0; index < urls.length; index += 4) {
       await Promise.all(
-        linked.slice(index, index + 4).map(async (entry) => {
-          const url = String(entry.sourceUrl)
+        urls.slice(index, index + 4).map(async (url) => {
+          const entries = entriesByUrl.get(url) ?? []
+          const label = `${String(entries[0].store)}：${entries.map((entry) => String(entry.ingredient)).join('、')}`
           try {
             const page = await fetchWithTimeout(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' } })
             const parsed = page.ok ? parseProductPrice(await page.text()) : null
             if (parsed) {
-              products[String(entry.id)] = { ...parsed, fetchedAt, url }
+              entries.forEach((entry) => {
+                products[String(entry.id)] = { ...parsed, fetchedAt, url }
+              })
             } else {
-              errors.push(`${String(entry.store)}：${String(entry.ingredient)} 讀不到價格（${page.status}）`)
+              errors.push(`${label} 讀不到價格（${page.status}）`)
             }
           } catch {
-            errors.push(`${String(entry.store)}：${String(entry.ingredient)} 連線逾時`)
+            errors.push(`${label} 連線逾時`)
           }
         }),
       )

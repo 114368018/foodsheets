@@ -3208,6 +3208,12 @@ td.num .merged-from {
   position: relative;
 }
 
+.tag-translation {
+  margin-left: 4px;
+  color: var(--text-3);
+  font-size: 0.85em;
+}
+
 .name-translation {
   position: absolute;
   top: 50%;

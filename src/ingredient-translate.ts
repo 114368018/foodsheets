@@ -65,6 +65,10 @@ export const BUILTIN_ZH_EN: Record<string, string> = {
   米酒: 'Rice wine', 檸檬汁: 'Lemon juice', 燕麥奶: 'Oat milk', 無糖豆奶: 'Unsweetened soy milk', 豆漿: 'Soy milk',
   椰奶: 'Coconut milk', 味精: 'MSG', 乾海帶: 'Dried kelp', 乾昆布: 'Dried kombu', 玉米罐頭: 'Canned corn',
   冰塊: 'Ice', 水: 'Water', 鮪魚罐頭: 'Canned tuna', 吉利丁: 'Gelatin', 吉利丁粉: 'Gelatin powder', 牛油: 'Beef tallow',
+  // Names that composing from parts would get wrong (紅糖 is not "red sugar").
+  紅糖: 'Brown sugar', 黑醋: 'Black vinegar', 白胡椒: 'White pepper', 黑芝麻: 'Black sesame', 大蒜: 'Garlic',
+  小麥: 'Wheat', 白飯: 'Cooked rice', 乾辣椒: 'Dried chili', 小米: 'Millet', 大豆: 'Soybeans', 白木耳: 'White fungus',
+  木耳: 'Wood ear mushroom', 竹筍: 'Bamboo shoot', 小蘇打: 'Baking soda', 中藥: 'Chinese herbs',
 }
 
 // Extra English spellings that should land on a Chinese name.
@@ -148,16 +152,74 @@ const lookupChinese = (name: string, learned: Record<string, string>, index: Rec
 
 // Chinese -> English: learned first, then the dictionary, then the English name someone typed that was
 // translated into this Chinese name (so it stays readable in English mode). Returns null when unknown.
-const lookupEnglish = (name: string, learned: Record<string, string>, zhEn: Record<string, string>): string | null => {
-  const compact = name.replace(/\s+/g, '')
+const lookupExactEnglish = (compact: string, learned: Record<string, string>, zhEn: Record<string, string>): string | null => {
   const direct = learned[`zh:${compact.toLowerCase()}`] ?? zhEn[compact]
   if (direct) return direct
   const typed = Object.keys(learned).find((key) => key.startsWith('en:') && learned[key] === compact)
   return typed ? typed.charAt(3).toUpperCase() + typed.slice(4) : null
 }
 
+// Words in front of a known name: 木鍋鏟 = 木 + 鍋鏟 -> "Wooden turner", 中型碗 -> "Medium bowl".
+// Longest first, so 大型 wins over 大.
+const ZH_PREFIXES: Array<[string, string]> = (
+  [
+    ['特大', 'Extra large'], ['大型', 'Large'], ['中型', 'Medium'], ['小型', 'Small'], ['迷你', 'Mini'], ['大', 'Large'],
+    ['中', 'Medium'], ['小', 'Small'], ['長', 'Long'], ['深', 'Deep'], ['淺', 'Shallow'], ['圓', 'Round'], ['方', 'Square'],
+    ['陶瓷', 'Ceramic'], ['瓷', 'Ceramic'], ['陶', 'Clay'], ['木頭', 'Wooden'], ['木', 'Wooden'], ['竹', 'Bamboo'],
+    ['紙', 'Paper'], ['塑膠', 'Plastic'], ['玻璃', 'Glass'], ['不鏽鋼', 'Stainless steel'], ['鐵', 'Iron'], ['鋁', 'Aluminum'],
+    ['鑄鐵', 'Cast iron'], ['矽膠', 'Silicone'], ['不沾', 'Non-stick'], ['免洗', 'Disposable'], ['一次性', 'Disposable'],
+    ['電動', 'Electric'], ['電', 'Electric'], ['手動', 'Manual'], ['白', 'White'], ['黑', 'Black'],
+    ['新鮮', 'Fresh'], ['冷凍', 'Frozen'], ['有機', 'Organic'], ['進口', 'Imported'], ['乾燥', 'Dried'], ['乾', 'Dried'],
+  ] as Array<[string, string]>
+).sort((a, b) => b[0].length - a[0].length)
+
+// Ingredient endings after a known name: 抹茶粉 -> "Matcha powder", 芒果汁 -> "Mango juice".
+const ZH_INGREDIENT_SUFFIXES: Array<[string, string]> = [
+  ['粉', 'powder'], ['醬', 'sauce'], ['汁', 'juice'], ['片', 'slices'], ['絲', 'shreds'], ['丁', 'cubes'], ['塊', 'chunks'],
+  ['泥', 'puree'], ['末', 'minced'], ['罐頭', 'canned'], ['條', 'strips'], ['球', 'balls'],
+]
+
+const lowerFirst = (text: string) => (/^[A-Z][a-z]/.test(text) ? text.charAt(0).toLowerCase() + text.slice(1) : text)
+
+const composeEnglish = (
+  compact: string,
+  learned: Record<string, string>,
+  zhEn: Record<string, string>,
+  suffixes: Array<[string, string]>,
+  depth = 0,
+): string | null => {
+  if (depth > 3) return null
+  const known = (part: string) => lookupExactEnglish(part, learned, zhEn) ?? composeEnglish(part, learned, zhEn, suffixes, depth + 1)
+  for (const [prefix, english] of ZH_PREFIXES) {
+    const rest = compact.slice(prefix.length)
+    if (compact.startsWith(prefix) && rest) {
+      const base = known(rest)
+      if (base) return `${english} ${lowerFirst(base)}`
+    }
+  }
+  for (const [suffix, english] of suffixes) {
+    const head = compact.slice(0, -suffix.length)
+    if (compact.endsWith(suffix) && head) {
+      const base = known(head)
+      if (base) return english === 'canned' ? `Canned ${lowerFirst(base)}` : `${base} ${english}`
+    }
+  }
+  return null
+}
+
+const lookupEnglish = (
+  name: string,
+  learned: Record<string, string>,
+  zhEn: Record<string, string>,
+  suffixes: Array<[string, string]> = [],
+): string | null => {
+  const compact = name.replace(/\s+/g, '')
+  return lookupExactEnglish(compact, learned, zhEn) ?? composeEnglish(compact, learned, zhEn, suffixes)
+}
+
 export const englishToChinese = (name: string, learned: Record<string, string>) => lookupChinese(name, learned, EN_ZH)
-export const chineseToEnglish = (name: string, learned: Record<string, string>) => lookupEnglish(name, learned, BUILTIN_ZH_EN)
+export const chineseToEnglish = (name: string, learned: Record<string, string>) =>
+  lookupEnglish(name, learned, BUILTIN_ZH_EN, ZH_INGREDIENT_SUFFIXES)
 
 // Tools, the same way: the tool library plus common extras. Learned translations are shared with
 // ingredients (a word means the same thing in either list).
@@ -181,6 +243,13 @@ export const BUILTIN_TOOL_ZH_EN: Record<string, string> = {
   噴槍: 'Kitchen torch', 隔熱手套: 'Oven mitts', 手套: 'Gloves', 鋁箔紙: 'Aluminum foil', 烘焙紙: 'Baking paper',
   保鮮膜: 'Plastic wrap', 廚房紙巾: 'Paper towels', 竹籤: 'Skewers', 牙籤: 'Toothpicks', 抹布: 'Dish cloth',
   菜瓜布: 'Scrub sponge', 延長線: 'Extension cord', 托盤: 'Tray',
+  // Single base words, so names like 瓷鍋 or 紙碗 can be put together from their parts.
+  鍋: 'Pot', 盤: 'Plate', 碟子: 'Small plate', 碟: 'Small plate', 杯: 'Cup', 刀: 'Knife', 盆: 'Basin', 匙: 'Spoon',
+  鏟: 'Spatula', 鏟子: 'Spatula', 勺: 'Ladle', 勺子: 'Ladle', 籃: 'Basket', 籃子: 'Basket', 架: 'Rack', 架子: 'Rack',
+  夾: 'Tongs', 刷: 'Brush', 刷子: 'Brush', 墊: 'Mat', 蓋: 'Lid', 蓋子: 'Lid', 筷: 'Chopsticks', 叉: 'Fork',
+  盒: 'Box', 盒子: 'Box', 罐: 'Jar', 罐子: 'Jar', 瓶: 'Bottle', 瓶子: 'Bottle', 袋: 'Bag', 袋子: 'Bag', 模: 'Mold',
+  模具: 'Mold', 容器: 'Container', 壺: 'Kettle', 桶: 'Bucket', 瓢: 'Scoop', 秤: 'Scale', 網: 'Mesh', 烤架: 'Grill rack',
+  冷卻架: 'Cooling rack', 刨片器: 'Mandoline slicer', 削皮器: 'Peeler', 壓泥器: 'Masher', 漏勺: 'Slotted spoon',
 }
 
 const EXTRA_TOOL_EN_ZH: Record<string, string> = {
