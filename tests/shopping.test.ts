@@ -5,6 +5,7 @@ import {
   categorizeIngredient,
   computeStoreStats,
   dedupeStoreItems,
+  splitEstimateByGroup,
   estimateWithEntry,
   storeKindOf,
   suggestPurchase,
@@ -121,4 +122,32 @@ test('money formatting puts the sign before the dollar sign', async () => {
   assert.equal(formatMoney(-24), '-$24')
   assert.equal(formatMoney(1234.4), '$1,234')
   assert.equal(formatMoney(0), '$0')
+})
+
+test('group estimates follow usage and add up exactly to the total', () => {
+  const { byGroup, unallocated } = splitEstimateByGroup([
+    { cost: 100, shares: [{ groupId: 'a', qty: 1 }, { groupId: 'b', qty: 1 }, { groupId: 'c', qty: 1 }] },
+    { cost: 55, shares: [{ groupId: 'a', qty: 4 }, { groupId: 'b', qty: 6 }] },
+    { cost: 0, shares: [{ groupId: 'c', qty: 9 }] },
+  ])
+  // Exact shares are 55.33, 66.33 and 33.33: each group gets its share rounded down or up by one dollar.
+  assert.ok(Math.abs((byGroup.get('a') ?? 0) - 55.33) < 1)
+  assert.ok(Math.abs((byGroup.get('b') ?? 0) - 66.33) < 1)
+  assert.ok(Math.abs((byGroup.get('c') ?? 0) - 33.33) < 1)
+  assert.equal(Array.from(byGroup.values()).reduce((sum, value) => sum + value, 0), 155)
+  assert.equal(unallocated, 0)
+})
+
+test('English pack units match the units groups use', () => {
+  const entry: PriceEntry = { id: 1, ingredient: '番茄', store: '全聯', price: '30', packQty: '2', packUnit: 'pcs', spec: '' }
+  assert.equal(estimateWithEntry(5, '顆', entry)?.cost, 90)
+  assert.equal(estimateWithEntry(600, 'g', { ...entry, packQty: '1', packUnit: 'jin', loose: true })?.cost, 30)
+  assert.equal(estimateWithEntry(2, '包', { ...entry, packQty: '1', packUnit: '袋' })?.cost, 60)
+  assert.equal(estimateWithEntry(5, 'g', entry), null)
+})
+
+test('an estimate nobody asked for stays unallocated', () => {
+  const { byGroup, unallocated } = splitEstimateByGroup([{ cost: 80, shares: [{ groupId: 'a', qty: 0 }] }])
+  assert.equal(byGroup.size, 0)
+  assert.equal(unallocated, 80)
 })

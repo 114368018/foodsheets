@@ -56,11 +56,14 @@ import {
   dedupeStoreItems,
   categorizeIngredient,
   estimateWithEntry,
+  splitEstimateByGroup,
   findPriceEntries,
   formatMoney,
   formatPack,
   storeKindOf,
   suggestPurchase,
+  toMeasure,
+  type Estimate,
   type GroupShare,
   type PriceEntry,
   type StoreKind,
@@ -99,6 +102,7 @@ const GROUP_TOOL_LIBRARY_TAB = '各組工具表' as const
 const CHANGELOG_TAB = '版本日誌' as const
 const SHOPPING_LIST_TAB = '食材採買' as const
 const PRICE_TAB = '價格參考' as const
+const BUDGET_TAB = '預算估算' as const
 const ADMIN_PASSCODE = 'admin'
 const STORAGE_KEY = 'foodsheets.v1.state'
 const RESET_CONFIRM_PHRASE = '全部歸零'
@@ -111,27 +115,84 @@ type GroupTab = string
 // Group tabs are group ids; the rest are fixed admin/info tabs.
 type TabName = string
 
-const ADMIN_TAB_ICONS: Record<string, IconName> = {
-  各組食材表: 'list',
-  各組工具表: 'tool',
-  食材總表: 'grid',
-  工具總表: 'box',
-  食材採買: 'cart',
-  價格參考: 'tag',
-  工具庫: 'book',
-  食材庫: 'book',
-}
-
-const ADMIN_TABS: TabName[] = [
-  GROUP_INGREDIENT_LIBRARY_TAB,
-  GROUP_TOOL_LIBRARY_TAB,
-  '食材總表',
-  '工具總表',
-  SHOPPING_LIST_TAB,
-  PRICE_TAB,
-  TOOL_LIBRARY_TAB,
-  INGREDIENT_LIBRARY_TAB,
+// The admin menu, named after what you want to do. Pages about the same thing share one entry and
+// switch with tabs at the top of the page.
+const ADMIN_NAV: Array<{
+  section: string
+  items: Array<{ label: string; icon: IconName; hint?: string; tabs: Array<{ id: TabName; label: string }> }>
+}> = [
+  {
+    section: '統計',
+    items: [
+      {
+        label: '食材彙整',
+        icon: 'grid',
+        hint: '總表看全部加起來要多少；各組明細看每組填了什麼、勾選備料。',
+        tabs: [
+          { id: '食材總表', label: '總表' },
+          { id: GROUP_INGREDIENT_LIBRARY_TAB, label: '各組明細' },
+        ],
+      },
+      {
+        label: '工具彙整',
+        icon: 'tool',
+        hint: '總表看全部加起來要多少；各組明細看每組填了什麼、勾選備妥。',
+        tabs: [
+          { id: '工具總表', label: '總表' },
+          { id: GROUP_TOOL_LIBRARY_TAB, label: '各組明細' },
+        ],
+      },
+    ],
+  },
+  {
+    section: '採買',
+    items: [
+      { label: BUDGET_TAB, icon: 'wallet', tabs: [{ id: BUDGET_TAB, label: BUDGET_TAB }] },
+      { label: '採買清單', icon: 'cart', tabs: [{ id: SHOPPING_LIST_TAB, label: '採買清單' }] },
+    ],
+  },
+  {
+    section: '資料設定',
+    items: [
+      { label: '價格資料', icon: 'tag', tabs: [{ id: PRICE_TAB, label: '價格資料' }] },
+      {
+        label: '輸入建議',
+        icon: 'book',
+        hint: '各組填寫時，輸入格下拉會出現的建議選項。',
+        tabs: [
+          { id: INGREDIENT_LIBRARY_TAB, label: '食材建議' },
+          { id: TOOL_LIBRARY_TAB, label: '工具建議' },
+        ],
+      },
+    ],
+  },
 ]
+
+const ADMIN_NAV_ITEMS = ADMIN_NAV.flatMap((section) => section.items)
+const ADMIN_TABS: TabName[] = ADMIN_NAV_ITEMS.flatMap((item) => item.tabs.map((tab) => tab.id))
+
+type BudgetStatus = 'priced' | 'no-price' | 'no-store-price' | 'unit-mismatch' | 'no-amount'
+type BudgetRow = {
+  key: string
+  row: ShoppingIngredientOverviewRow
+  status: BudgetStatus
+  cost: number
+  label: string
+  spec: string
+  store: string
+  assigned: boolean
+}
+type BudgetForm = {
+  key: string
+  store: string
+  price: string
+  packQty: string
+  packUnit: string
+  loose: boolean
+  linked: boolean
+  // The price being changed; null adds a new one.
+  entryId: number | null
+}
 
 type ShoppingStoreItem = {
   id: number
@@ -1512,6 +1573,11 @@ function App() {
   const [priceUpdateMessage, setPriceUpdateMessage] = useState('')
   const [aliasDraft, setAliasDraft] = useState({ from: '', to: '' })
   const [translationsExpanded, setTranslationsExpanded] = useState<Record<string, boolean>>({})
+  const [budgetGroupFilter, setBudgetGroupFilter] = useState('')
+  const [budgetMissingOnly, setBudgetMissingOnly] = useState(false)
+  const [budgetQuery, setBudgetQuery] = useState('')
+  const [budgetForm, setBudgetForm] = useState<BudgetForm | null>(null)
+  const [budgetSavedMessage, setBudgetSavedMessage] = useState('')
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncRetryTick, setSyncRetryTick] = useState(0)
   const [syncStatus, setSyncStatus] = useState(
@@ -1532,6 +1598,7 @@ function App() {
   const getGroupName = (groupId: GroupTab) => t(groupData[groupId]?.name || groupId)
   const getCollapse = (groupId: GroupTab) => groupCollapseState[groupId] ?? EMPTY_COLLAPSE_STATE
 
+  const activeAdminNavItem = ADMIN_NAV_ITEMS.find((item) => item.tabs.some((tab) => tab.id === currentTab))
   const activeGroup: GroupTab = isGroupTab(currentTab) ? currentTab : (groupOrder[1] ?? SAMPLE_GROUP_TAB)
   const isActiveGroupSample = activeGroup === SAMPLE_GROUP_TAB
   const canEditActiveGroup = !isActiveGroupSample || adminUnlocked
@@ -1652,6 +1719,7 @@ function App() {
   const bilingualIngredient = (name: string) => bilingualName(name, canonicalIngredient, ingredientLabel)
   const bilingualTool = (name: string) => bilingualName(name, canonicalTool, toolLabel)
   const amountLabel = (text: string) => (lang === 'en' ? amountToEnglish(text) : text)
+  const unitLabel = (unit: string) => (lang === 'en' ? unitToEnglish(unit) : unit)
   // "Frying pan" and "frying  pan" are the same name; "含：…" and "統計為…" only list real differences.
   const sameName = (a: string, b: string) => cleanDisplayName(a).toLowerCase() === cleanDisplayName(b).toLowerCase()
   const renderVariants = (variants: string[], label: string) => {
@@ -1966,7 +2034,10 @@ function App() {
         autoAt: marketPrices.updatedAt,
       }
       const existing = book.findIndex(
-        (entry) => normalizeNameText(entry.ingredient) === normalizeNameText(item.ingredient) && storeKindOf(entry.store) === '菜市場',
+        (entry) =>
+          normalizeNameText(entry.ingredient) === normalizeNameText(item.ingredient) &&
+          storeKindOf(entry.store) === '菜市場' &&
+          toMeasure(1, entry.packUnit)?.dimension === 'weight',
       )
       if (existing < 0) {
         book.push(autoEntry)
@@ -2091,6 +2162,28 @@ function App() {
     )
   })
 
+  const estimateLabel = (estimate: Estimate) =>
+    t('參考 ${0}/{1}{2}', [
+      estimate.entry.price,
+      formatPack({ ...estimate.entry, packUnit: unitLabel(estimate.entry.packUnit) }),
+      estimate.entry.loose ? '' : ` × ${estimate.packs}`,
+    ])
+
+  const estimateRowAtStore = (row: ShoppingIngredientOverviewRow, ownedQty: number, storeName: string) => {
+    const needQty = Math.max(row.requiredTotal - ownedQty, 0)
+    if (needQty === 0) {
+      return { cost: 0, label: t('家裡已有足夠數量'), spec: '' }
+    }
+
+    const kind = storeKindOf(storeName)
+    const best = findPriceEntries(row.ingredient, effectivePriceBook)
+      .filter((entry) => entry.store === storeName.trim() || (kind !== null && storeKindOf(entry.store) === kind))
+      .map((entry) => estimateWithEntry(needQty, row.totalUnit, entry))
+      .filter((estimate) => estimate !== null)
+      .sort((a, b) => a.cost - b.cost)[0]
+    return best ? { cost: best.cost, label: estimateLabel(best), spec: best.entry.spec } : null
+  }
+
   // Cheapest estimate for an item at this particular store, after subtracting what is already at home.
   // An ingredient requested in two units (5 顆 and 300 g) is estimated per unit and added up;
   // "have at home" only applies when there is a single unit.
@@ -2100,25 +2193,7 @@ function App() {
       return null
     }
 
-    const kind = storeKindOf(storeName)
-    const parts = rows.map((row) => {
-      const needQty = Math.max(row.requiredTotal - (rows.length === 1 ? toNumber(item.ownedQty ?? '') : 0), 0)
-      if (needQty === 0) {
-        return { cost: 0, label: t('家裡已有足夠數量') }
-      }
-
-      const best = findPriceEntries(row.ingredient, effectivePriceBook)
-        .filter((entry) => entry.store === storeName.trim() || (kind !== null && storeKindOf(entry.store) === kind))
-        .map((entry) => estimateWithEntry(needQty, row.totalUnit, entry))
-        .filter((estimate) => estimate !== null)
-        .sort((a, b) => a.cost - b.cost)[0]
-      if (!best) {
-        return null
-      }
-
-      const packs = best.entry.loose ? '' : ` × ${best.packs}`
-      return { cost: best.cost, label: t('參考 ${0}/{1}{2}', [best.entry.price, formatPack(best.entry), packs]) }
-    })
+    const parts = rows.map((row) => estimateRowAtStore(row, rows.length === 1 ? toNumber(item.ownedQty ?? '') : 0, storeName))
 
     const known = parts.filter((part) => part !== null)
     if (known.length === 0) {
@@ -2155,6 +2230,195 @@ function App() {
     actual: spendingAllocation.byGroup.get(groupId)?.actual ?? 0,
     estimated: spendingAllocation.byGroup.get(groupId)?.estimated ?? 0,
   }))
+
+  // One line of the 預算估算 page. It uses the same numbers as the shopping page: the assigned store's
+  // price (minus what is already at home), or the cheapest suggestion while nothing is assigned yet.
+  const describeBudgetRow = (row: ShoppingIngredientOverviewRow): BudgetRow => {
+    const key = `${row.ingredient}|${row.totalUnit}`
+    const assignedStore = shoppingStores.find((store) => store.id === row.assignedStoreId)
+    const store = assignedStore?.storeName.trim() || row.suggestion.store
+    const base = { key, row, store, assigned: Boolean(assignedStore), cost: 0, label: '', spec: '' }
+
+    if (row.requiredTotal <= 0 || !row.totalUnit.trim()) {
+      return { ...base, status: 'no-amount' }
+    }
+
+    if (assignedStore) {
+      const nameKey = canonicalIngredient(row.ingredient).key
+      const item = assignedStore.items.find((entry) => entry.ingredient.trim() && canonicalIngredient(entry.ingredient).key === nameKey)
+      const owned = findOverviewRows(row.ingredient).length === 1 ? toNumber(item?.ownedQty ?? '') : 0
+      const estimate = estimateRowAtStore(row, owned, assignedStore.storeName)
+      return estimate
+        ? { ...base, status: 'priced', cost: estimate.cost, label: estimate.label, spec: estimate.spec }
+        : { ...base, status: 'no-store-price' }
+    }
+
+    const { estimate, references } = row.suggestion
+    if (estimate) {
+      return { ...base, status: 'priced', cost: estimate.cost, label: estimateLabel(estimate), spec: estimate.entry.spec }
+    }
+    return references.length > 0
+      ? { ...base, status: 'unit-mismatch', label: `${t(references[0].store)} $${references[0].price}/${formatPack({ ...references[0], packUnit: unitLabel(references[0].packUnit) })}` }
+      : { ...base, status: 'no-price' }
+  }
+
+  const isPriceFor = (entry: PriceEntry, ingredient: string, store: string) => {
+    const kind = storeKindOf(store)
+    return (
+      normalizeNameText(entry.ingredient) === normalizeNameText(ingredient) &&
+      (entry.store === store || (kind !== null && storeKindOf(entry.store) === kind))
+    )
+  }
+
+  // Starts from the price already known at that store, otherwise from the amount this ingredient needs.
+  const budgetFormFor = ({ key, row }: BudgetRow, store: string): BudgetForm => {
+    const known = effectivePriceBook
+      .filter((entry) => isPriceFor(entry, row.ingredient, store))
+      .map((entry) => estimateWithEntry(row.requiredTotal, row.totalUnit, entry))
+      .filter((estimate) => estimate !== null)
+      .sort((a, b) => a.cost - b.cost)[0]?.entry
+    if (known) {
+      return {
+        key,
+        store,
+        price: known.price,
+        packQty: known.packQty,
+        packUnit: known.packUnit,
+        loose: Boolean(known.loose),
+        linked: Boolean(known.sourceUrl),
+        entryId: known.id,
+      }
+    }
+    const isCount = canonicalUnit(row.totalUnit).dimension === 'count'
+    return {
+      key,
+      store,
+      price: '',
+      packQty: isCount ? '1' : formatNumber(row.requiredTotal),
+      packUnit: row.totalUnit,
+      loose: false,
+      linked: false,
+      entryId: null,
+    }
+  }
+
+  // Changing the price in use replaces it instead of adding a second one, which the cheapest-price
+  // suggestion could otherwise ignore; a price per 顆 next to one per 斤 is added as its own entry.
+  // It is a hand-entered price, so the daily update leaves it alone.
+  const saveBudgetPrice = ({ row }: BudgetRow, form: BudgetForm) => {
+    const fields = {
+      price: form.price.trim(),
+      packQty: form.packQty.trim() || '1',
+      packUnit: form.packUnit.trim(),
+      updatedAt: new Date().toISOString(),
+    }
+    setPriceBook((previous) => {
+      if (!previous.some((entry) => entry.id === form.entryId)) {
+        return [
+          { id: nextId(), ingredient: row.ingredient, store: form.store, spec: '', ...fields, ...(form.loose ? { loose: true } : {}) },
+          ...previous,
+        ]
+      }
+      return previous.map((entry) => {
+        if (entry.id !== form.entryId) {
+          return entry
+        }
+        const updated: PriceEntry = { ...entry, ...fields, loose: form.loose }
+        delete updated.sourceUrl
+        return updated
+      })
+    })
+    setBudgetForm(null)
+    setBudgetSavedMessage(t('已儲存「{0}」的價格，預估已更新。', [ingredientLabel(row.ingredient)]))
+  }
+
+  const renderBudgetForm = (budgetRow: BudgetRow, form: BudgetForm) => {
+    const { row } = budgetRow
+    const update = (fields: Partial<BudgetForm>) => setBudgetForm({ ...form, ...fields })
+    const stores = Array.from(new Set([form.store, ...STORE_KINDS, ...shoppingStores.map((store) => store.storeName.trim()).filter(Boolean)]))
+    const preview = Number(form.price) > 0
+      ? estimateWithEntry(row.requiredTotal, row.totalUnit, {
+          id: 0,
+          ingredient: row.ingredient,
+          store: form.store,
+          price: form.price,
+          packQty: form.packQty,
+          packUnit: form.packUnit,
+          spec: '',
+          loose: form.loose,
+        })
+      : null
+
+    return (
+      <form
+        className="budget-form"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (preview) {
+            saveBudgetPrice(budgetRow, form)
+          }
+        }}
+      >
+        <label className="budget-field">
+          <span>{t('商店')}</span>
+          <select className="input input-sm" value={form.store} onChange={(event) => setBudgetForm(budgetFormFor(budgetRow, event.target.value))}>
+            {stores.map((store) => (
+              <option key={store} value={store}>
+                {t(store)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="budget-field">
+          <span>{t('價格')}</span>
+          <input
+            className="input input-sm"
+            type="number"
+            min="0"
+            inputMode="numeric"
+            value={form.price}
+            onChange={(event) => update({ price: event.target.value })}
+            autoFocus
+          />
+        </label>
+        <label className="budget-field">
+          <span>{t('包裝數量')}</span>
+          <input
+            className="input input-sm"
+            type="number"
+            min="0"
+            inputMode="decimal"
+            value={form.packQty}
+            onChange={(event) => update({ packQty: event.target.value })}
+          />
+        </label>
+        <label className="budget-field">
+          <span>{t('單位')}</span>
+          <input className="input input-sm" value={form.packUnit} onChange={(event) => update({ packUnit: event.target.value })} />
+        </label>
+        <label className="budget-check">
+          <input type="checkbox" className="checkbox" checked={form.loose} onChange={(event) => update({ loose: event.target.checked })} />
+          {t('秤重')}
+        </label>
+        <div className="budget-form-actions">
+          <button type="submit" className="btn btn-sm" disabled={!preview}>
+            {t('儲存')}
+          </button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setBudgetForm(null)}>
+            {t('取消')}
+          </button>
+        </div>
+        <p className={`field-hint budget-preview ${Number(form.price) > 0 && !preview ? 'is-error' : ''}`}>
+          {preview
+            ? t('需求 {0}，這項預估 {1}', [amountLabel(row.requiredDisplay), formatMoney(preview.cost)])
+            : Number(form.price) > 0
+              ? t('單位和需求（{0}）對不上，無法換算：請用同一類單位（重量、容量或個數）。', [unitLabel(row.totalUnit)])
+              : t('輸入這個包裝的售價，例如 10 顆一盒賣 $54。')}
+          {form.linked && ` ${t('這筆價格原本每天自動更新；儲存後改用你填的價格。')}`}
+        </p>
+      </form>
+    )
+  }
 
   const updateIngredientRow = (
     groupName: GroupTab,
@@ -2783,7 +3047,7 @@ function App() {
       return
     }
 
-    const confirmed = window.confirm(t('最後確認：此操作會刪除所有組別資料、食材庫調整與採買資料，且無法復原。'))
+    const confirmed = window.confirm(t('最後確認：此操作會刪除所有組別資料、建議清單調整與採買資料，且無法復原。'))
     if (!confirmed) {
       return
     }
@@ -2844,7 +3108,7 @@ function App() {
     }
 
     if (ingredientLibrary.some((name) => name.toLowerCase() === trimmed.toLowerCase())) {
-      setLibraryError(t('食材庫已存在相同名稱。'))
+      setLibraryError(t('食材建議清單已有相同名稱。'))
       return
     }
 
@@ -2859,7 +3123,7 @@ function App() {
   }
 
   const removeLibraryIngredient = (name: string) => {
-    const confirmed = window.confirm(t('確定要從食材庫刪除「{0}」嗎？', [name]))
+    const confirmed = window.confirm(t('確定要從食材建議清單刪除「{0}」嗎？', [name]))
     if (!confirmed) {
       return
     }
@@ -2875,7 +3139,7 @@ function App() {
     }
 
     if (toolLibrary.some((name) => name.toLowerCase() === trimmed.toLowerCase())) {
-      setToolLibraryError(t('工具庫已存在相同名稱。'))
+      setToolLibraryError(t('工具建議清單已有相同名稱。'))
       return
     }
 
@@ -2885,7 +3149,7 @@ function App() {
   }
 
   const removeLibraryTool = (name: string) => {
-    const confirmed = window.confirm(t('確定要從工具庫刪除「{0}」嗎？', [name]))
+    const confirmed = window.confirm(t('確定要從工具建議清單刪除「{0}」嗎？', [name]))
     if (!confirmed) {
       return
     }
@@ -4106,18 +4370,30 @@ function App() {
           <nav className="nav-section nav-admin" aria-label={t('管理')}>
             <p className="nav-label">{t('管理')}</p>
             <div className="nav-list">
-              {ADMIN_TABS.map((tabName) => (
-                <button
-                  key={tabName}
-                  type="button"
-                  className={`nav-item ${currentTab === tabName ? 'is-active' : ''}`}
-                  aria-current={currentTab === tabName ? 'page' : undefined}
-                  onClick={() => setCurrentTab(tabName)}
-                  title={t(tabName)}
-                >
-                  <Icon name={ADMIN_TAB_ICONS[tabName] ?? 'list'} size={15} />
-                  <span className="nav-item-name">{t(tabName)}</span>
-                </button>
+              {ADMIN_NAV.map(({ section, items }) => (
+                <Fragment key={section}>
+                  <span className="nav-subhead">{t(section)}</span>
+                  {items.map((item) => {
+                    const isActive = item.tabs.some((tab) => tab.id === currentTab)
+                    return (
+                      <button
+                        key={item.label}
+                        type="button"
+                        className={`nav-item ${isActive ? 'is-active' : ''}`}
+                        aria-current={isActive ? 'page' : undefined}
+                        onClick={() => {
+                          if (!isActive) {
+                            setCurrentTab(item.tabs[0].id)
+                          }
+                        }}
+                        title={t(item.label)}
+                      >
+                        <Icon name={item.icon} size={15} />
+                        <span className="nav-item-name">{t(item.label)}</span>
+                      </button>
+                    )
+                  })}
+                </Fragment>
               ))}
             </div>
           </nav>
@@ -4875,13 +5151,35 @@ function App() {
           </Fragment>
         )}
 
+        {adminUnlocked && activeAdminNavItem && activeAdminNavItem.tabs.length > 1 && (
+          <header className="page-head page-head-row">
+            <div>
+              <h2 className="group-title">{t(activeAdminNavItem.label)}</h2>
+              {activeAdminNavItem.hint && <p className="muted small">{t(activeAdminNavItem.hint)}</p>}
+            </div>
+            <div className="segmented" role="group" aria-label={t(activeAdminNavItem.label)}>
+              {activeAdminNavItem.tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={currentTab === tab.id ? 'is-active' : ''}
+                  aria-pressed={currentTab === tab.id}
+                  onClick={() => setCurrentTab(tab.id)}
+                >
+                  {t(tab.label)}
+                </button>
+              ))}
+            </div>
+          </header>
+        )}
+
         {currentTab === '食材總表' && adminUnlocked && (
           <>
           {renderNameMerge('ingredient')}
           {renderTranslationTable('ingredient')}
           <section className="card">
             <header className="card-head">
-              <h2 className="card-title">{t('食材總表')}</h2>
+              <h3 className="card-title">{t('食材總表')}</h3>
               <span className="muted small">{t('共 {0} 項 · 有相機圖示的可點開看各組附的照片', [ingredientSummaryRows.length])}</span>
             </header>
             <div className="table-scroll">
@@ -4979,7 +5277,7 @@ function App() {
           {renderTranslationTable('tool')}
           <section className="card">
             <header className="card-head">
-              <h2 className="card-title">{t('工具總表')}</h2>
+              <h3 className="card-title">{t('工具總表')}</h3>
               <span className="muted small">{t('共 {0} 項', [toolSummaryRows.length])}</span>
             </header>
             <div className="table-scroll">
@@ -5063,7 +5361,7 @@ function App() {
         {currentTab === TOOL_LIBRARY_TAB && adminUnlocked && (
           <section className="card">
             <header className="card-head">
-              <h2 className="card-title">{t('工具庫')}</h2>
+              <h3 className="card-title">{t('工具建議清單')}</h3>
               <span className="muted small">{t('提供給各組工具欄位作為建議選項 · 共 {0} 項', [toolLibrary.length])}</span>
             </header>
             <div className="card-body">
@@ -5086,7 +5384,7 @@ function App() {
               </form>
               {toolLibraryError && <p className="field-hint is-error">{toolLibraryError}</p>}
               {toolLibrary.length === 0 ? (
-                <p className="empty">{t('目前工具庫沒有資料')}</p>
+                <p className="empty">{t('工具建議清單目前是空的')}</p>
               ) : (
                 <ul className="tag-list">
                   {toolLibrary.map((name) => (
@@ -5112,7 +5410,7 @@ function App() {
         {currentTab === INGREDIENT_LIBRARY_TAB && adminUnlocked && (
           <section className="card">
             <header className="card-head">
-              <h2 className="card-title">{t('食材庫')}</h2>
+              <h3 className="card-title">{t('食材建議清單')}</h3>
               <span className="muted small">{t('提供給各組食材欄位作為建議選項（蛋奶素，不含五辛）· 共 {0} 項', [ingredientLibrary.length])}</span>
             </header>
             <div className="card-body">
@@ -5135,7 +5433,7 @@ function App() {
               </form>
               {libraryError && <p className="field-hint is-error">{libraryError}</p>}
               {ingredientLibrary.length === 0 ? (
-                <p className="empty">{t('目前食材庫沒有資料')}</p>
+                <p className="empty">{t('食材建議清單目前是空的')}</p>
               ) : (
                 <ul className="tag-list">
                   {ingredientLibrary.map((name) => (
@@ -5164,8 +5462,8 @@ function App() {
           <>
             <header className="page-head page-head-row">
               <div>
-                <h2 className="group-title">{t('各組食材表')}</h2>
-                <p className="muted small">{t('各組明細，不進行跨組合併。勾選「備料」記錄已備妥的項目。')}</p>
+                <h3 className="section-title">{t('各組明細')}</h3>
+                <p className="muted small">{t('不進行跨組合併，也不顯示價格。勾選「備料」記錄已備妥的項目。')}</p>
               </div>
               <button type="button" className="btn btn-sm" onClick={() => void exportAllGroupsRecipes()} disabled={exportingWord}>
                 <Icon name="download" size={14} />
@@ -5275,8 +5573,8 @@ function App() {
           <>
             <header className="page-head page-head-row">
               <div>
-                <h2 className="group-title">{t('各組工具表')}</h2>
-                <p className="muted small">{t('各組工具明細，不進行跨組合併。')}</p>
+                <h3 className="section-title">{t('各組明細')}</h3>
+                <p className="muted small">{t('不進行跨組合併。')}</p>
               </div>
               <button type="button" className="btn btn-sm" onClick={() => void exportAllGroupsTools()} disabled={exportingWord}>
                 <Icon name="download" size={14} />
@@ -5358,6 +5656,283 @@ function App() {
           </>
         )}
 
+        {currentTab === BUDGET_TAB &&
+          adminUnlocked &&
+          (() => {
+            const budgetRows = shoppingIngredientOverviewRows.map(describeBudgetRow)
+            const split = splitEstimateByGroup(
+              budgetRows.map(({ row, cost }) => ({
+                cost,
+                shares: row.groupNeeds.map((need) => ({ groupId: need.groupId, qty: need.qty })),
+              })),
+            )
+            const total = budgetRows.reduce((sum, { cost }) => sum + cost, 0)
+            const unestimatedCount = budgetRows.filter(({ status }) => status !== 'priced').length
+            const missingRows = budgetRows.filter(({ status }) => status !== 'priced' && status !== 'no-amount')
+            const noAmountCount = unestimatedCount - missingRows.length
+            const groupRows = nonSampleGroupIds.map((groupId) => ({
+              groupId,
+              name: getGroupName(groupId),
+              cost: split.byGroup.get(groupId) ?? 0,
+              missing: missingRows.filter(({ row }) => row.groupNeeds.some((need) => need.groupId === groupId)).length,
+            }))
+            const groupFilter = nonSampleGroupIds.includes(budgetGroupFilter) ? budgetGroupFilter : ''
+            const keyword = budgetQuery.trim().toLowerCase()
+            const visibleRows = budgetRows.filter(({ row, status }) => {
+              if (budgetMissingOnly && status === 'priced') {
+                return false
+              }
+              if (groupFilter && !row.groupNeeds.some((need) => need.groupId === groupFilter)) {
+                return false
+              }
+              return !keyword || `${row.ingredient} ${ingredientLabel(row.ingredient)} ${t(row.category)}`.toLowerCase().includes(keyword)
+            })
+
+            return (
+              <>
+                <header className="page-head page-head-row">
+                  <div>
+                    <h2 className="group-title">{t('預算估算')}</h2>
+                    <p className="muted small">{t('開始採買前，先看整體和各組大概要花多少；沒有價格的食材可以直接在這裡補上。')}</p>
+                  </div>
+                  <div className="page-head-actions">
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCurrentTab(PRICE_TAB)}>
+                      <Icon name="tag" size={14} />
+                      {t('管理價格資料')}
+                    </button>
+                    <button type="button" className="btn btn-sm" onClick={() => setCurrentTab(SHOPPING_LIST_TAB)}>
+                      <Icon name="cart" size={14} />
+                      {t('去採買清單')}
+                    </button>
+                  </div>
+                </header>
+
+                <div className="kpi-grid kpi-grid-3">
+                  <div className="kpi kpi-accent">
+                    <span className="kpi-label">{t('預估總花費')}</span>
+                    <strong className="kpi-value">{formatMoney(total)}</strong>
+                    <span className="kpi-sub">
+                      {unestimatedCount > 0 ? t('還有 {0} 項沒算進去，實際會更高', [unestimatedCount]) : t('所有食材都已估價')}
+                    </span>
+                  </div>
+                  <div className="kpi">
+                    <span className="kpi-label">{t('已估價')}</span>
+                    <strong className="kpi-value">
+                      {budgetRows.length - unestimatedCount}
+                      <span className="kpi-of">/{budgetRows.length}</span>
+                    </strong>
+                    <span className="kpi-sub">{t('項食材')}</span>
+                  </div>
+                  <div className={`kpi ${missingRows.length > 0 ? 'is-warn' : 'is-ok'}`}>
+                    <span className="kpi-label">{t('待補價格')}</span>
+                    <strong className="kpi-value">{missingRows.length}</strong>
+                    <span className="kpi-sub">
+                      {noAmountCount > 0
+                        ? t('另有 {0} 項沒有明確數量', [noAmountCount])
+                        : missingRows.length > 0
+                          ? t('可在下方直接補上')
+                          : t('不用補')}
+                    </span>
+                  </div>
+                </div>
+
+                <section className="card">
+                  <header className="card-head">
+                    <h3 className="card-title">{t('各組預估')}</h3>
+                    <span className="muted small">{t('點一組可以只看該組的食材')}</span>
+                  </header>
+                  <div className="table-scroll">
+                    <table className="data-table budget-group-table">
+                      <thead>
+                        <tr>
+                          <th>{t('組別')}</th>
+                          <th className="num">{t('預估')}</th>
+                          <th className="num">{t('占比')}</th>
+                          <th className="num">{t('待補價格')}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {groupRows.map((group) => (
+                          <tr key={group.groupId} className={groupFilter === group.groupId ? 'is-selected' : ''}>
+                            <td className="strong">
+                              <button
+                                type="button"
+                                className="link-button"
+                                aria-pressed={groupFilter === group.groupId}
+                                onClick={() => setBudgetGroupFilter(groupFilter === group.groupId ? '' : group.groupId)}
+                              >
+                                {group.name}
+                              </button>
+                            </td>
+                            <td className="num strong">{formatMoney(group.cost)}</td>
+                            <td className="num muted">{total > 0 ? `${Math.round((group.cost / total) * 100)}%` : '–'}</td>
+                            <td className="num">
+                              {group.missing > 0 ? <span className="chip chip-warn">{group.missing}</span> : <span className="muted">0</span>}
+                            </td>
+                          </tr>
+                        ))}
+                        {split.unallocated > 0 && (
+                          <tr>
+                            <td className="muted">{t('沒有對應組別（總表手動加量）')}</td>
+                            <td className="num strong">{formatMoney(split.unallocated)}</td>
+                            <td className="num muted">{total > 0 ? `${Math.round((split.unallocated / total) * 100)}%` : '–'}</td>
+                            <td />
+                          </tr>
+                        )}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td className="strong">{t('合計')}</td>
+                          <td className="num strong">{formatMoney(total)}</td>
+                          <td />
+                          <td />
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                  <p className="muted small spend-note">
+                    {t('共用的食材依各組用量比例分攤，所以各組加總等於總預估。金額只顯示在這個管理頁，各組頁面和各組明細都看不到價格。')}
+                  </p>
+                </section>
+
+                <section className="card">
+                  <header className="card-head">
+                    <h3 className="card-title">{t('食材估價')}</h3>
+                    {groupFilter && <span className="chip">{getGroupName(groupFilter)}</span>}
+                    <span className="muted small">{t('共 {0} 項', [visibleRows.length])}</span>
+                  </header>
+                  <div className="card-body">
+                    <div className="toolbar budget-toolbar">
+                      <div className="segmented" role="group" aria-label={t('篩選')}>
+                        <button type="button" className={budgetMissingOnly ? '' : 'is-active'} onClick={() => setBudgetMissingOnly(false)}>
+                          {t('全部食材')}
+                        </button>
+                        <button type="button" className={budgetMissingOnly ? 'is-active' : ''} onClick={() => setBudgetMissingOnly(true)}>
+                          {t('只看待補價格')}
+                        </button>
+                      </div>
+                      <select
+                        className="input input-sm budget-group-select"
+                        value={groupFilter}
+                        onChange={(event) => setBudgetGroupFilter(event.target.value)}
+                        aria-label={t('組別')}
+                      >
+                        <option value="">{t('全部組別')}</option>
+                        {groupRows.map((group) => (
+                          <option key={group.groupId} value={group.groupId}>
+                            {group.name}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        className="input input-sm toolbar-search"
+                        value={budgetQuery}
+                        onChange={(event) => setBudgetQuery(event.target.value)}
+                        placeholder={t('搜尋食材或分類')}
+                        aria-label={t('搜尋食材或分類')}
+                      />
+                    </div>
+                    <p className="field-hint budget-saved" role="status">
+                      {budgetSavedMessage}
+                    </p>
+
+                    {visibleRows.length === 0 ? (
+                      <p className="empty">
+                        {budgetRows.length === 0
+                          ? t('各組還沒有填食材。')
+                          : budgetMissingOnly
+                            ? t('這裡的食材都已經有價格了。')
+                            : t('目前沒有符合條件的食材。')}
+                      </p>
+                    ) : (
+                      <div className="assign-list">
+                        {CATEGORY_ORDER.map((category) => {
+                          const categoryRows = visibleRows.filter(({ row }) => row.category === category)
+                          if (categoryRows.length === 0) {
+                            return null
+                          }
+
+                          return (
+                            <div key={category} className="assign-group">
+                              <p className="assign-group-title">
+                                {t(category)} <span className="muted">{categoryRows.length}</span>
+                              </p>
+                              {categoryRows.map((budgetRow) => {
+                                const { key, row, status, cost, label, store, assigned, spec } = budgetRow
+                                const isOpen = budgetForm?.key === key
+                                const groupNeed = groupFilter ? row.groupNeeds.find((need) => need.groupId === groupFilter) : undefined
+                                const needTotal = row.groupNeeds.reduce((sum, need) => sum + need.qty, 0)
+
+                                return (
+                                  <Fragment key={key}>
+                                    <div className={`budget-row ${status === 'priced' ? '' : 'is-missing'}`}>
+                                      <div className="assign-main">
+                                        <span className="assign-name">
+                                          {ingredientLabel(row.ingredient)}
+                                          <span className="assign-qty">{amountLabel(status === 'no-amount' ? row.note || '–' : row.requiredDisplay)}</span>
+                                        </span>
+                                        <span className="assign-meta">
+                                          {status === 'no-amount'
+                                            ? row.groupNeeds.map((need) => need.groupName).join('、')
+                                            : groupNeed
+                                              ? status === 'priced'
+                                                ? t('本組 {0}，分攤約 {1}', [
+                                                    amountLabel(formatQuantity(groupNeed.qty, row.totalUnit)),
+                                                    formatMoney(needTotal > 0 ? (cost * groupNeed.qty) / needTotal : 0),
+                                                  ])
+                                                : t('本組 {0}', [amountLabel(formatQuantity(groupNeed.qty, row.totalUnit))])
+                                              : row.groupNeeds
+                                                  .map((need) => `${need.groupName} ${amountLabel(formatQuantity(need.qty, row.totalUnit))}`)
+                                                  .join('、')}
+                                        </span>
+                                      </div>
+                                      <div className="budget-source">
+                                        {status === 'priced' ? (
+                                          <>
+                                            <span className="suggest-store">{assigned ? t(store) : t('建議 {0}', [t(store)])}</span>
+                                            <span className="suggest-cost">{[label, lang === 'en' && isChineseName(spec) ? '' : spec].filter(Boolean).join(' · ')}</span>
+                                          </>
+                                        ) : (
+                                          <span className="budget-missing-text">
+                                            {status === 'no-price' && t('還沒有價格')}
+                                            {status === 'no-store-price' && t('{0} 還沒有價格', [t(store)])}
+                                            {status === 'unit-mismatch' && t('現有價格是 {0}，和需求的單位不同，請補一筆「{1}」的價格', [label, unitLabel(row.totalUnit)])}
+                                            {status === 'no-amount' && t('沒有明確數量或單位，無法估價')}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <strong className="budget-cost">{status === 'priced' ? formatMoney(cost) : '–'}</strong>
+                                      {status === 'no-amount' ? (
+                                        <span />
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className={`btn btn-sm ${status === 'priced' ? 'btn-ghost' : ''}`}
+                                          aria-expanded={isOpen}
+                                          onClick={() => {
+                                            setBudgetSavedMessage('')
+                                            setBudgetForm(isOpen ? null : budgetFormFor(budgetRow, store))
+                                          }}
+                                        >
+                                          {status === 'priced' ? t('改價格') : t('新增價格')}
+                                        </button>
+                                      )}
+                                    </div>
+                                    {isOpen && budgetForm && renderBudgetForm(budgetRow, budgetForm)}
+                                  </Fragment>
+                                )
+                              })}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </section>
+              </>
+            )
+          })()}
+
         {currentTab === SHOPPING_LIST_TAB &&
           adminUnlocked &&
           (() => {
@@ -5397,7 +5972,7 @@ function App() {
             return (
               <>
                 <header className="page-head">
-                  <h2 className="group-title">{t('食材採買')}</h2>
+                  <h2 className="group-title">{t('採買清單')}</h2>
                   <p className="muted small">
                     {t('① 分配每樣食材去哪買 → ② 到店打開「採買模式」用手機邊買邊勾、順手記金額 → ③ 填收據總額，自動算出花費和各組分攤。')}
                   </p>
@@ -5429,7 +6004,9 @@ function App() {
                   <div className="kpi">
                     <span className="kpi-label">{t('預估花費')}</span>
                     <strong className="kpi-value">{formatMoney(estimatedTotal)}</strong>
-                    <span className="kpi-sub">{t('依價格參考估算')}</span>
+                    <button type="button" className="kpi-link" onClick={() => setCurrentTab(BUDGET_TAB)}>
+                      {t('看各組預估與補價格')}
+                    </button>
                   </div>
                   <div className="kpi kpi-accent">
                     <span className="kpi-label">{t('實際花費')}</span>
@@ -5499,7 +6076,7 @@ function App() {
                         />
                       </div>
                       <p className="muted small">
-                        {t('「建議」依價格參考算出最省的地方，沒有參考價時依分類：生鮮→菜市場、包裝與調味→全聯。可直接用右邊選單更改。')}
+                        {t('「建議」依價格資料算出最省的地方，沒有參考價時依分類：生鮮→菜市場、包裝與調味→全聯。可直接用右邊選單更改。')}
                       </p>
 
                       {filteredShoppingIngredientOverviewRows.length === 0 ? (
@@ -5903,7 +6480,7 @@ function App() {
                     </div>
                   </div>
                   <p className="muted small spend-note">
-                    {t('各組分攤依該組填寫的用量比例計算；填了收據總額時，會依收據金額等比例調整。')}
+                    {t('各組分攤依該組填寫的用量比例計算；填了收據總額時，會依收據金額等比例調整。這裡只算已分配到商店的食材，完整的各組預估請看「預算估算」。')}
                   </p>
                 </section>
               </>
@@ -5914,10 +6491,14 @@ function App() {
           <>
             <header className="page-head page-head-row">
               <div>
-                <h2 className="group-title">{t('價格參考')}</h2>
+                <h2 className="group-title">{t('價格資料')}</h2>
                 <p className="muted small">{t('用來建議去哪買、估算預算。初始資料是 {0} 依公開報導與一般行情整理的估價，請依實際購買價隨時修正； 「秤重」代表依重量計價（例如菜市場每斤），不用整包購買。', [PRICE_REFERENCE_UPDATED])}</p>
               </div>
               <div className="page-head-actions">
+                <button type="button" className="btn btn-ghost" onClick={() => setCurrentTab(BUDGET_TAB)}>
+                  <Icon name="wallet" size={15} />
+                  {t('看預算估算')}
+                </button>
                 <button type="button" className="btn btn-ghost" onClick={() => void runPriceUpdate()} disabled={priceUpdating}>
                   <Icon name="history" size={15} />
                   {priceUpdating ? t('更新中…') : t('立即更新價格')}

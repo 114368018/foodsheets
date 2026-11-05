@@ -42,6 +42,8 @@ const shopping = fs.readFileSync(path.join(root, 'src/shopping.ts'), 'utf8')
 for (const match of shopping.matchAll(/name: '([^']+)',\r?\n\s*defaultStore/g)) keys.add(match[1])
 ;['其他', '菜市場', '全聯', '萬家福', 'Costco'].forEach((key) => keys.add(key))
 for (const match of source.matchAll(/const \w+_TAB = '([^']+)' as const/g)) keys.add(match[1])
+const adminNav = source.slice(source.indexOf('const ADMIN_NAV:'), source.indexOf('const ADMIN_NAV_ITEMS'))
+for (const match of adminNav.matchAll(/(?:section|label|hint): '([^']+)'/g)) keys.add(match[1])
 ;['食材總表', '工具總表', '範例組', '第一組', '第二組', '第三組', '第四組', '第五組', '第六組', '第七組', '學長姐組', '新商店', '未命名商店'].forEach(
   (key) => keys.add(key),
 )

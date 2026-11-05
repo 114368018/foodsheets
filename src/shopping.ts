@@ -147,9 +147,40 @@ export const storeKindOf = (storeName: string): StoreKind | null => {
 }
 
 // ---------- Units ----------
-const WEIGHT_UNITS: Record<string, number> = { g: 1, 克: 1, 公克: 1, kg: 1000, 公斤: 1000, 斤: 600, 台斤: 600, 兩: 37.5 }
+const WEIGHT_UNITS: Record<string, number> = { g: 1, 克: 1, 公克: 1, kg: 1000, 公斤: 1000, 斤: 600, 台斤: 600, jin: 600, 兩: 37.5 }
 const VOLUME_UNITS: Record<string, number> = { ml: 1, cc: 1, 毫升: 1, l: 1000, 公升: 1000 }
-const COUNT_ALIASES: Record<string, string> = { 個: '顆', 粒: '顆', 顆: '顆', 根: '條', 支: '條', 條: '條', 入: '顆' }
+const COUNT_ALIASES: Record<string, string> = {
+  個: '顆',
+  粒: '顆',
+  顆: '顆',
+  根: '條',
+  支: '條',
+  條: '條',
+  入: '顆',
+  袋: '包',
+  束: '把',
+  pc: '顆',
+  pcs: '顆',
+  piece: '顆',
+  pieces: '顆',
+  ea: '顆',
+  pack: '包',
+  packs: '包',
+  bag: '包',
+  bags: '包',
+  slice: '片',
+  slices: '片',
+  box: '盒',
+  boxes: '盒',
+  bottle: '瓶',
+  bottles: '瓶',
+  can: '罐',
+  cans: '罐',
+  block: '塊',
+  blocks: '塊',
+  bunch: '把',
+  bunches: '把',
+}
 
 type Measure = { dimension: string; value: number }
 
@@ -373,4 +404,40 @@ export const dedupeStoreItems = <Item extends StoreItemLike, Store extends Store
       return !key || best.get(key) === item
     }),
   }))
+}
+
+// Splits each ingredient's estimate over the groups by how much they asked for, in whole dollars that
+// add up exactly: rounding differences go to the groups with the largest remainders.
+// Costs with no group to charge (an amount only an admin added) are returned as unallocated.
+export const splitEstimateByGroup = (
+  rows: Array<{ cost: number; shares: GroupShare[] }>,
+): { byGroup: Map<string, number>; unallocated: number } => {
+  const exact = new Map<string, number>()
+  let unallocated = 0
+
+  rows.forEach(({ cost, shares }) => {
+    if (cost <= 0) {
+      return
+    }
+    const counted = shares.filter((share) => share.qty > 0)
+    const totalQty = counted.reduce((sum, share) => sum + share.qty, 0)
+    if (totalQty === 0) {
+      unallocated += cost
+      return
+    }
+    counted.forEach((share) => {
+      exact.set(share.groupId, (exact.get(share.groupId) ?? 0) + (cost * share.qty) / totalQty)
+    })
+  })
+
+  const entries = Array.from(exact.entries())
+  const byGroup = new Map(entries.map(([groupId, value]) => [groupId, Math.floor(value + 1e-9)]))
+  const exactSum = entries.reduce((sum, [, value]) => sum + value, 0)
+  const leftover = Math.round(exactSum) - Array.from(byGroup.values()).reduce((sum, value) => sum + value, 0)
+  entries
+    .sort((a, b) => b[1] - Math.floor(b[1] + 1e-9) - (a[1] - Math.floor(a[1] + 1e-9)))
+    .slice(0, Math.max(leftover, 0))
+    .forEach(([groupId]) => byGroup.set(groupId, (byGroup.get(groupId) ?? 0) + 1))
+
+  return { byGroup, unallocated }
 }
