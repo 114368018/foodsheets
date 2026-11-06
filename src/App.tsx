@@ -47,6 +47,7 @@ import {
   toolEnglishToChinese,
 } from './ingredient-translate'
 import { nextId } from './ids'
+import { AddableSelect } from './AddableSelect'
 import {
   CATEGORY_ORDER,
   STORE_KINDS,
@@ -147,14 +148,21 @@ const ADMIN_NAV: Array<{
   {
     section: '採買',
     items: [
-      { label: BUDGET_TAB, icon: 'wallet', tabs: [{ id: BUDGET_TAB, label: BUDGET_TAB }] },
+      {
+        label: '預算與價格',
+        icon: 'wallet',
+        hint: '預算估算看整體和各組要花多少；價格資料管理所有商店的價格。',
+        tabs: [
+          { id: BUDGET_TAB, label: BUDGET_TAB },
+          { id: PRICE_TAB, label: '價格資料' },
+        ],
+      },
       { label: '採買清單', icon: 'cart', tabs: [{ id: SHOPPING_LIST_TAB, label: '採買清單' }] },
     ],
   },
   {
-    section: '資料設定',
+    section: '設定',
     items: [
-      { label: '價格資料', icon: 'tag', tabs: [{ id: PRICE_TAB, label: '價格資料' }] },
       {
         label: '輸入建議',
         icon: 'book',
@@ -181,6 +189,8 @@ type BudgetRow = {
   spec: string
   store: string
   assigned: boolean
+  // The price this estimate is based on.
+  entryId: number | null
 }
 type BudgetForm = {
   key: string
@@ -189,9 +199,6 @@ type BudgetForm = {
   packQty: string
   packUnit: string
   loose: boolean
-  linked: boolean
-  // The price being changed; null adds a new one.
-  entryId: number | null
 }
 
 type ShoppingStoreItem = {
@@ -321,6 +328,8 @@ type SharedState = {
   priceBook: PriceEntry[]
   // Starting price batches already added to priceBook (see normalizePriceBook).
   priceSeedsApplied: string[]
+  // The stores offered in dropdowns; stores still used by a price or the shopping list are added to these.
+  priceStores: string[]
   // Admin-defined spellings to merge in summaries: normalized variant -> canonical name.
   ingredientAliases: Record<string, string>
   toolAliases: Record<string, string>
@@ -991,6 +1000,9 @@ const normalizeSharedState = (input: unknown): SharedState => {
     preparedGroupTools: toBooleanRecord(raw.preparedGroupTools),
     shoppingStores: normalizeShoppingStores(raw.shoppingStores),
     ...normalizePriceBook(raw.priceBook, raw.priceSeedsApplied),
+    priceStores: Array.isArray(raw.priceStores)
+      ? Array.from(new Set(raw.priceStores.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))))
+      : [...STORE_KINDS],
     ingredientAliases: toStringRecord(raw.ingredientAliases),
     toolAliases: toStringRecord(raw.toolAliases),
     nameTranslations: toStringRecord(raw.nameTranslations),
@@ -1497,6 +1509,7 @@ function App() {
     preparedGroupTools,
     shoppingStores,
     priceBook,
+    priceStores,
     ingredientAliases,
     toolAliases,
     dismissedNamePairs,
@@ -1526,6 +1539,14 @@ function App() {
   const setPreparedGroupTools = sharedFieldSetter('preparedGroupTools')
   const setShoppingStores = sharedFieldSetter('shoppingStores')
   const setPriceBook = sharedFieldSetter('priceBook')
+  const setPriceStores = sharedFieldSetter('priceStores')
+  const storeOptions = Array.from(
+    new Set(
+      [...priceStores, ...priceBook.map((entry) => entry.store.trim()), ...shoppingStores.map((store) => store.storeName.trim())].filter(
+        (store) => store && store !== t('新商店'),
+      ),
+    ),
+  )
   const setIngredientAliases = sharedFieldSetter('ingredientAliases')
   const setToolAliases = sharedFieldSetter('toolAliases')
   const setDismissedNamePairs = sharedFieldSetter('dismissedNamePairs')
@@ -1576,7 +1597,11 @@ function App() {
   const [budgetGroupFilter, setBudgetGroupFilter] = useState('')
   const [budgetMissingOnly, setBudgetMissingOnly] = useState(false)
   const [budgetQuery, setBudgetQuery] = useState('')
+  const [budgetOpenKey, setBudgetOpenKey] = useState<string | null>(null)
   const [budgetForm, setBudgetForm] = useState<BudgetForm | null>(null)
+  const [storeManagerExpanded, setStoreManagerExpanded] = useState(true)
+  const [storeManagerError, setStoreManagerError] = useState('')
+  const [newStoreName, setNewStoreName] = useState('')
   const [budgetSavedMessage, setBudgetSavedMessage] = useState('')
   const [remoteReady, setRemoteReady] = useState(false)
   const [syncRetryTick, setSyncRetryTick] = useState(0)
@@ -2020,11 +2045,17 @@ function App() {
         : entry
     })
 
+    // Market prices go to whichever store is the market now; with none left there is nowhere to show them.
+    const marketStore = [...priceStores, ...priceBook.map((entry) => entry.store)].find((store) => storeKindOf(store) === '菜市場')
+    if (!marketStore) {
+      return book
+    }
+
     marketPrices.produce.forEach((item, index) => {
       const autoEntry: PriceEntry = {
         id: -(index + 1),
         ingredient: item.ingredient,
-        store: '菜市場',
+        store: marketStore,
         price: String(item.price),
         packQty: '1',
         packUnit: '斤',
@@ -2047,10 +2078,19 @@ function App() {
     })
 
     return book
-  }, [marketPrices, priceBook])
+  }, [marketPrices, priceBook, priceStores])
 
   // One row per ingredient (name + unit): total needed, which groups need it, where to buy it and what it should cost.
   const shoppingIngredientOverviewRows = useMemo<ShoppingIngredientOverviewRow[]>(() => {
+    // A suggestion by category names a kind of store; use that kind's current name, or the first store if it was removed.
+    const withCurrentStore = (suggestion: Suggestion): Suggestion => {
+      if (suggestion.reason !== 'category') {
+        return suggestion
+      }
+      const kind = storeKindOf(suggestion.store)
+      return { ...suggestion, store: priceStores.find((store) => storeKindOf(store) === kind) ?? priceStores[0] ?? suggestion.store }
+    }
+
     const assignedStoreByIngredient = new Map<string, ShoppingStore>()
     shoppingStores.forEach((store) => {
       store.items.forEach((item) => {
@@ -2099,7 +2139,7 @@ function App() {
           requiredDisplay: formatQuantity(row.requiredTotal, row.totalUnit),
           category: categorizeIngredient(row.ingredient),
           groupNeeds: Array.from(needsByKey.get(key)?.values() ?? []),
-          suggestion: suggestPurchase(row.ingredient, row.requiredTotal, row.totalUnit, effectivePriceBook),
+          suggestion: withCurrentStore(suggestPurchase(row.ingredient, row.requiredTotal, row.totalUnit, effectivePriceBook)),
           assignedStoreId: store?.id ?? null,
           assignedStoreName: store ? store.storeName.trim() || t('未命名商店') : null,
         }
@@ -2109,7 +2149,7 @@ function App() {
           CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category) ||
           a.ingredient.localeCompare(b.ingredient, 'zh-Hant'),
       )
-  }, [groupData, ingredientAdjustments, ingredientAliases, nameTranslations, ingredientSummaryRows, nonSampleGroupIds, effectivePriceBook, shoppingStores, t])
+  }, [groupData, ingredientAdjustments, ingredientAliases, nameTranslations, ingredientSummaryRows, nonSampleGroupIds, effectivePriceBook, priceStores, shoppingStores, t])
 
   // Canonical name -> its overview rows (more than one when groups used units that cannot be converted).
   const overviewByIngredient = useMemo(() => {
@@ -2172,7 +2212,7 @@ function App() {
   const estimateRowAtStore = (row: ShoppingIngredientOverviewRow, ownedQty: number, storeName: string) => {
     const needQty = Math.max(row.requiredTotal - ownedQty, 0)
     if (needQty === 0) {
-      return { cost: 0, label: t('家裡已有足夠數量'), spec: '' }
+      return { cost: 0, label: t('家裡已有足夠數量'), spec: '', entryId: null }
     }
 
     const kind = storeKindOf(storeName)
@@ -2181,7 +2221,7 @@ function App() {
       .map((entry) => estimateWithEntry(needQty, row.totalUnit, entry))
       .filter((estimate) => estimate !== null)
       .sort((a, b) => a.cost - b.cost)[0]
-    return best ? { cost: best.cost, label: estimateLabel(best), spec: best.entry.spec } : null
+    return best ? { cost: best.cost, label: estimateLabel(best), spec: best.entry.spec, entryId: best.entry.id } : null
   }
 
   // Cheapest estimate for an item at this particular store, after subtracting what is already at home.
@@ -2237,7 +2277,7 @@ function App() {
     const key = `${row.ingredient}|${row.totalUnit}`
     const assignedStore = shoppingStores.find((store) => store.id === row.assignedStoreId)
     const store = assignedStore?.storeName.trim() || row.suggestion.store
-    const base = { key, row, store, assigned: Boolean(assignedStore), cost: 0, label: '', spec: '' }
+    const base = { key, row, store, assigned: Boolean(assignedStore), cost: 0, label: '', spec: '', entryId: null }
 
     if (row.requiredTotal <= 0 || !row.totalUnit.trim()) {
       return { ...base, status: 'no-amount' }
@@ -2248,94 +2288,297 @@ function App() {
       const item = assignedStore.items.find((entry) => entry.ingredient.trim() && canonicalIngredient(entry.ingredient).key === nameKey)
       const owned = findOverviewRows(row.ingredient).length === 1 ? toNumber(item?.ownedQty ?? '') : 0
       const estimate = estimateRowAtStore(row, owned, assignedStore.storeName)
-      return estimate
-        ? { ...base, status: 'priced', cost: estimate.cost, label: estimate.label, spec: estimate.spec }
+      if (estimate) {
+        return { ...base, status: 'priced', cost: estimate.cost, label: estimate.label, spec: estimate.spec, entryId: estimate.entryId }
+      }
+      const kind = storeKindOf(assignedStore.storeName)
+      const atStore = row.suggestion.references.find(
+        (entry) => Number(entry.price) > 0 && (entry.store === store || (kind !== null && storeKindOf(entry.store) === kind)),
+      )
+      return atStore
+        ? { ...base, status: 'unit-mismatch', label: `${t(atStore.store)} $${atStore.price}/${formatPack({ ...atStore, packUnit: unitLabel(atStore.packUnit) })}` }
         : { ...base, status: 'no-store-price' }
     }
 
     const { estimate, references } = row.suggestion
     if (estimate) {
-      return { ...base, status: 'priced', cost: estimate.cost, label: estimateLabel(estimate), spec: estimate.entry.spec }
+      return { ...base, status: 'priced', cost: estimate.cost, label: estimateLabel(estimate), spec: estimate.entry.spec, entryId: estimate.entry.id }
     }
-    return references.length > 0
-      ? { ...base, status: 'unit-mismatch', label: `${t(references[0].store)} $${references[0].price}/${formatPack({ ...references[0], packUnit: unitLabel(references[0].packUnit) })}` }
+    const known = references.find((entry) => Number(entry.price) > 0)
+    return known
+      ? { ...base, status: 'unit-mismatch', label: `${t(known.store)} $${known.price}/${formatPack({ ...known, packUnit: unitLabel(known.packUnit) })}` }
       : { ...base, status: 'no-price' }
   }
 
-  const isPriceFor = (entry: PriceEntry, ingredient: string, store: string) => {
-    const kind = storeKindOf(store)
-    return (
-      normalizeNameText(entry.ingredient) === normalizeNameText(ingredient) &&
-      (entry.store === store || (kind !== null && storeKindOf(entry.store) === kind))
-    )
-  }
+  // A new price starts from the amount this ingredient needs.
+  const budgetFormFor = ({ key, row }: BudgetRow, store: string): BudgetForm => ({
+    key,
+    store,
+    price: '',
+    packQty: canonicalUnit(row.totalUnit).dimension === 'count' ? '1' : formatNumber(row.requiredTotal),
+    packUnit: row.totalUnit,
+    loose: false,
+  })
 
-  // Starts from the price already known at that store, otherwise from the amount this ingredient needs.
-  const budgetFormFor = ({ key, row }: BudgetRow, store: string): BudgetForm => {
-    const known = effectivePriceBook
-      .filter((entry) => isPriceFor(entry, row.ingredient, store))
-      .map((entry) => estimateWithEntry(row.requiredTotal, row.totalUnit, entry))
-      .filter((estimate) => estimate !== null)
-      .sort((a, b) => a.cost - b.cost)[0]?.entry
-    if (known) {
-      return {
-        key,
-        store,
-        price: known.price,
-        packQty: known.packQty,
-        packUnit: known.packUnit,
-        loose: Boolean(known.loose),
-        linked: Boolean(known.sourceUrl),
-        entryId: known.id,
-      }
-    }
-    const isCount = canonicalUnit(row.totalUnit).dimension === 'count'
-    return {
-      key,
-      store,
-      price: '',
-      packQty: isCount ? '1' : formatNumber(row.requiredTotal),
-      packUnit: row.totalUnit,
-      loose: false,
-      linked: false,
-      entryId: null,
-    }
-  }
-
-  // Changing the price in use replaces it instead of adding a second one, which the cheapest-price
-  // suggestion could otherwise ignore; a price per 顆 next to one per 斤 is added as its own entry.
   // It is a hand-entered price, so the daily update leaves it alone.
-  const saveBudgetPrice = ({ row }: BudgetRow, form: BudgetForm) => {
-    const fields = {
-      price: form.price.trim(),
-      packQty: form.packQty.trim() || '1',
-      packUnit: form.packUnit.trim(),
-      updatedAt: new Date().toISOString(),
-    }
-    setPriceBook((previous) => {
-      if (!previous.some((entry) => entry.id === form.entryId)) {
-        return [
-          { id: nextId(), ingredient: row.ingredient, store: form.store, spec: '', ...fields, ...(form.loose ? { loose: true } : {}) },
-          ...previous,
-        ]
-      }
-      return previous.map((entry) => {
-        if (entry.id !== form.entryId) {
-          return entry
-        }
-        const updated: PriceEntry = { ...entry, ...fields, loose: form.loose }
-        delete updated.sourceUrl
-        return updated
-      })
-    })
+  const addBudgetPrice = ({ row }: BudgetRow, form: BudgetForm) => {
+    setPriceBook((previous) => [
+      {
+        id: nextId(),
+        ingredient: row.ingredient,
+        store: form.store,
+        spec: '',
+        price: form.price.trim(),
+        packQty: form.packQty.trim() || '1',
+        packUnit: form.packUnit.trim(),
+        updatedAt: new Date().toISOString(),
+        ...(form.loose ? { loose: true } : {}),
+      },
+      ...previous,
+    ])
     setBudgetForm(null)
     setBudgetSavedMessage(t('已儲存「{0}」的價格，預估已更新。', [ingredientLabel(row.ingredient)]))
+  }
+
+  // Market prices the list has no entry for are read-only until an admin chooses to set one by hand.
+  const makePriceEditable = (entry: PriceEntry) => {
+    const manual: PriceEntry = { ...entry, id: nextId(), updatedAt: new Date().toISOString() }
+    delete manual.auto
+    delete manual.autoAt
+    setPriceBook((previous) => [manual, ...previous])
+  }
+
+  // ---------- Stores ----------
+  const addPriceStore = (rawName: string) => {
+    const name = rawName.trim()
+    if (name) {
+      setPriceStores((previous) => (previous.includes(name) ? previous : [...previous, name]))
+    }
+  }
+
+  // Renaming also updates the prices and the shopping list that use the store. Returns false if nothing changed.
+  const renameStore = (oldName: string, rawName: string) => {
+    const name = rawName.trim()
+    if (!name || name === oldName) {
+      return false
+    }
+    if (storeOptions.includes(name) && !window.confirm(t('「{0}」已經存在，要把「{1}」的價格和清單併過去嗎？', [name, oldName]))) {
+      return false
+    }
+    setPriceStores((previous) => Array.from(new Set([...previous, oldName].map((store) => (store === oldName ? name : store)))))
+    setPriceBook((previous) => previous.map((entry) => (entry.store.trim() === oldName ? { ...entry, store: name } : entry)))
+    setShoppingStores((previous) => previous.map((store) => (store.storeName.trim() === oldName ? { ...store, storeName: name } : store)))
+    return true
+  }
+
+  const removeStore = (name: string) => {
+    if (shoppingStores.some((store) => store.storeName.trim() === name)) {
+      setStoreManagerError(t('「{0}」還在採買清單裡使用，請先到採買清單刪除這間店。', [name]))
+      return
+    }
+    const priceCount = priceBook.filter((entry) => entry.store.trim() === name).length
+    if (priceCount > 0 && !window.confirm(t('確定要刪除「{0}」嗎？它的 {1} 筆價格也會一起刪除。', [name, priceCount]))) {
+      return
+    }
+    setStoreManagerError('')
+    setPriceStores((previous) => previous.filter((store) => store !== name))
+    setPriceBook((previous) => previous.filter((entry) => entry.store.trim() !== name))
+  }
+
+  const renderStoreSelect = (value: string, onChange: (store: string) => void, className: string) => (
+    <AddableSelect
+      value={value}
+      options={Array.from(new Set([value, ...storeOptions].filter(Boolean))).map((store) => ({ value: store, label: t(store) }))}
+      onChange={onChange}
+      onAdd={(name) => {
+        addPriceStore(name)
+        onChange(name)
+      }}
+      addLabel={t('＋ 新增商店…')}
+      addPlaceholder={t('輸入商店名稱')}
+      ariaLabel={t('商店')}
+      className={className}
+    />
+  )
+
+  const renderStoreManager = () => (
+    <section className="card">
+      <header className="card-head">
+        {renderCollapseButton(!storeManagerExpanded, () => setStoreManagerExpanded((previous) => !previous), t('商店管理'))}
+        <h3 className="card-title">{t('商店管理')}</h3>
+        <span className="muted small">{t('新增、改名或刪除商店；改名時，價格和採買清單會一起更新。')}</span>
+      </header>
+      {storeManagerExpanded && (
+        <div className="card-body">
+          <ul className="store-manager">
+            {storeOptions.map((store) => (
+              <li key={store} className="store-manager-row">
+                <input
+                  className="input input-sm"
+                  defaultValue={store}
+                  aria-label={t('{0} 的名稱', [store])}
+                  onBlur={(event) => {
+                    if (!renameStore(store, event.target.value)) {
+                      event.target.value = store
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.currentTarget.blur()
+                    }
+                  }}
+                />
+                <span className="muted small">{t('{0} 筆價格', [priceBook.filter((entry) => entry.store.trim() === store).length])}</span>
+                <button
+                  type="button"
+                  className="icon-btn icon-btn-danger"
+                  onClick={() => removeStore(store)}
+                  aria-label={t('刪除 {0}', [store])}
+                  title={t('刪除 {0}', [store])}
+                >
+                  <Icon name="close" size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+          <form
+            className="inline-form"
+            onSubmit={(event) => {
+              event.preventDefault()
+              addPriceStore(newStoreName)
+              setNewStoreName('')
+            }}
+          >
+            <input
+              className="input input-sm"
+              value={newStoreName}
+              onChange={(event) => setNewStoreName(event.target.value)}
+              placeholder={t('輸入商店名稱')}
+              aria-label={t('輸入商店名稱')}
+            />
+            <button type="submit" className="btn btn-sm" disabled={!newStoreName.trim()}>
+              <Icon name="plus" size={14} />
+              {t('新增商店')}
+            </button>
+          </form>
+          {storeManagerError && <p className="field-hint is-error">{storeManagerError}</p>}
+        </div>
+      )}
+    </section>
+  )
+
+  // Every price for this ingredient, editable right next to the estimate it feeds.
+  const renderBudgetPrices = (budgetRow: BudgetRow) => {
+    const { row, entryId, store } = budgetRow
+    const entries = findPriceEntries(row.ingredient, effectivePriceBook)
+
+    return (
+      <div className="budget-prices">
+        {entries.map((entry) => {
+          const estimate = estimateWithEntry(row.requiredTotal, row.totalUnit, entry)
+          const isUsed = entry.id === entryId
+          const hasNoPrice = !(Number(entry.price) > 0)
+
+          return (
+            <div key={entry.id} className={`budget-price-row ${isUsed ? 'is-used' : ''}`}>
+              {entry.id < 0 ? (
+                <>
+                  <span className="budget-price-readonly">
+                    {t(entry.store)} ${entry.price}/{formatPack({ ...entry, packUnit: unitLabel(entry.packUnit) })}
+                    <span className="muted small"> {t('每日市場行情')}</span>
+                  </span>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => makePriceEditable(entry)}>
+                    {t('手動改價')}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <label className="budget-field">
+                    <span>{t('商店')}</span>
+                    {renderStoreSelect(entry.store, (value) => updatePriceEntry(entry.id, { store: value }), 'input input-sm')}
+                  </label>
+                  <label className="budget-field">
+                    <span>{t('價格')}</span>
+                    <input
+                      className="input input-sm"
+                      type="number"
+                      min="0"
+                      inputMode="numeric"
+                      value={entry.price}
+                      onChange={(event) => updatePriceEntry(entry.id, { price: event.target.value })}
+                    />
+                  </label>
+                  <label className="budget-field">
+                    <span>{t('包裝數量')}</span>
+                    <input
+                      className="input input-sm"
+                      type="number"
+                      min="0"
+                      inputMode="decimal"
+                      value={entry.packQty}
+                      onChange={(event) => updatePriceEntry(entry.id, { packQty: event.target.value })}
+                    />
+                  </label>
+                  <label className="budget-field">
+                    <span>{t('單位')}</span>
+                    <input
+                      className="input input-sm"
+                      value={entry.packUnit}
+                      onChange={(event) => updatePriceEntry(entry.id, { packUnit: event.target.value })}
+                    />
+                  </label>
+                  <label className="budget-check">
+                    <input
+                      type="checkbox"
+                      className="checkbox"
+                      checked={Boolean(entry.loose)}
+                      onChange={(event) => updatePriceEntry(entry.id, { loose: event.target.checked ? true : undefined })}
+                    />
+                    {t('秤重')}
+                  </label>
+                </>
+              )}
+              <span className="budget-price-status">
+                {isUsed && <span className="chip chip-ok">{t('目前採用')}</span>}
+                {estimate ? (
+                  <span>{t('預估 {0}', [formatMoney(estimate.cost)])}</span>
+                ) : (
+                  <span className="budget-missing-text">{hasNoPrice ? t('還沒填價格') : t('單位不同，無法換算')}</span>
+                )}
+                {normalizeNameText(entry.ingredient) !== normalizeNameText(row.ingredient) && (
+                  <span className="muted small">{t('「{0}」的價格', [entry.ingredient])}</span>
+                )}
+                {entry.auto === 'product' && <span className="muted small">{t('自動更新')}</span>}
+              </span>
+              {entry.id > 0 && (
+                <button
+                  type="button"
+                  className="icon-btn icon-btn-danger"
+                  onClick={() => removePriceEntry(entry.id)}
+                  aria-label={t('刪除這筆價格')}
+                  title={t('刪除這筆價格')}
+                >
+                  <Icon name="close" size={14} />
+                </button>
+              )}
+            </div>
+          )
+        })}
+        {budgetForm ? (
+          renderBudgetForm(budgetRow, budgetForm)
+        ) : (
+          <button type="button" className="btn-add-row btn-add-row-padded" onClick={() => setBudgetForm(budgetFormFor(budgetRow, store))}>
+            <Icon name="plus" size={14} />
+            {t('新增一筆價格')}
+          </button>
+        )}
+      </div>
+    )
   }
 
   const renderBudgetForm = (budgetRow: BudgetRow, form: BudgetForm) => {
     const { row } = budgetRow
     const update = (fields: Partial<BudgetForm>) => setBudgetForm({ ...form, ...fields })
-    const stores = Array.from(new Set([form.store, ...STORE_KINDS, ...shoppingStores.map((store) => store.storeName.trim()).filter(Boolean)]))
     const preview = Number(form.price) > 0
       ? estimateWithEntry(row.requiredTotal, row.totalUnit, {
           id: 0,
@@ -2355,19 +2598,13 @@ function App() {
         onSubmit={(event) => {
           event.preventDefault()
           if (preview) {
-            saveBudgetPrice(budgetRow, form)
+            addBudgetPrice(budgetRow, form)
           }
         }}
       >
         <label className="budget-field">
           <span>{t('商店')}</span>
-          <select className="input input-sm" value={form.store} onChange={(event) => setBudgetForm(budgetFormFor(budgetRow, event.target.value))}>
-            {stores.map((store) => (
-              <option key={store} value={store}>
-                {t(store)}
-              </option>
-            ))}
-          </select>
+          {renderStoreSelect(form.store, (store) => update({ store }), 'input input-sm')}
         </label>
         <label className="budget-field">
           <span>{t('價格')}</span>
@@ -2414,7 +2651,6 @@ function App() {
             : Number(form.price) > 0
               ? t('單位和需求（{0}）對不上，無法換算：請用同一類單位（重量、容量或個數）。', [unitLabel(row.totalUnit)])
               : t('輸入這個包裝的售價，例如 10 顆一盒賣 $54。')}
-          {form.linked && ` ${t('這筆價格原本每天自動更新；儲存後改用你填的價格。')}`}
         </p>
       </form>
     )
@@ -3519,8 +3755,11 @@ function App() {
       const target = canonicalIngredient(ingredient).key
       const existing = prev.flatMap((store) => store.items).find((item) => canonicalIngredient(item.ingredient).key === target)
       const kind = storeKindOf(storeName)
-      // If a store of this kind already exists, use it rather than creating a second one.
-      const sameKindStore = kind ? prev.find((store) => storeKindOf(store.storeName) === kind) : undefined
+      // Use a store with this name if there is one. A bare kind (全聯) also reuses any store of that kind,
+      // while a name someone typed (全聯中正店) gets its own store.
+      const sameKindStore =
+        prev.find((store) => store.storeName.trim() === storeName) ??
+        (kind === storeName ? prev.find((store) => storeKindOf(store.storeName) === kind) : undefined)
       const storeId = sameKindStore?.id ?? newStoreId(storeName, prev)
       const item = existing ?? { id: nextId(), ingredient, price: '', ownedQty: '' }
       const stores = prev.map((store) => ({
@@ -3643,18 +3882,27 @@ function App() {
 
   const addPriceEntry = () => {
     setPriceBook((prev) => [
-      { id: nextId(), ingredient: '', store: '全聯', price: '', packQty: '1', packUnit: '', spec: '' },
+      { id: nextId(), ingredient: '', store: storeOptions[0] ?? '', price: '', packQty: '1', packUnit: '', spec: '' },
       ...prev,
     ])
   }
 
   // Editing anything but the product link counts as a hand-entered price, which daily market
-  // prices then leave alone.
+  // prices then leave alone. A typed price, or another store, also ends the link to the product
+  // page: otherwise the fetched price would keep replacing it.
   const updatePriceEntry = (id: number, fields: Partial<PriceEntry>) => {
     const isManualPrice = Object.keys(fields).some((key) => key !== 'sourceUrl')
+    const endsLink = 'price' in fields || 'store' in fields
     setPriceBook((prev) =>
       prev.map((entry) =>
-        entry.id === id ? { ...entry, ...fields, ...(isManualPrice ? { updatedAt: new Date().toISOString() } : {}) } : entry,
+        entry.id === id
+          ? {
+              ...entry,
+              ...(endsLink ? { price: effectivePriceBook.find((item) => item.id === id)?.price ?? entry.price, sourceUrl: undefined } : {}),
+              ...fields,
+              ...(isManualPrice ? { updatedAt: new Date().toISOString() } : {}),
+            }
+          : entry,
       ),
     )
   }
@@ -5692,14 +5940,10 @@ function App() {
               <>
                 <header className="page-head page-head-row">
                   <div>
-                    <h2 className="group-title">{t('預算估算')}</h2>
-                    <p className="muted small">{t('開始採買前，先看整體和各組大概要花多少；沒有價格的食材可以直接在這裡補上。')}</p>
+                    <h3 className="section-title">{t('預算估算')}</h3>
+                    <p className="muted small">{t('開始採買前，先看整體和各組大概要花多少；每項食材的價格都可以直接在這裡新增、修改或刪除。')}</p>
                   </div>
                   <div className="page-head-actions">
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => setCurrentTab(PRICE_TAB)}>
-                      <Icon name="tag" size={14} />
-                      {t('管理價格資料')}
-                    </button>
                     <button type="button" className="btn btn-sm" onClick={() => setCurrentTab(SHOPPING_LIST_TAB)}>
                       <Icon name="cart" size={14} />
                       {t('去採買清單')}
@@ -5859,7 +6103,7 @@ function App() {
                               </p>
                               {categoryRows.map((budgetRow) => {
                                 const { key, row, status, cost, label, store, assigned, spec } = budgetRow
-                                const isOpen = budgetForm?.key === key
+                                const isOpen = budgetOpenKey === key
                                 const groupNeed = groupFilter ? row.groupNeeds.find((need) => need.groupId === groupFilter) : undefined
                                 const needTotal = row.groupNeeds.reduce((sum, need) => sum + need.qty, 0)
 
@@ -5911,14 +6155,19 @@ function App() {
                                           aria-expanded={isOpen}
                                           onClick={() => {
                                             setBudgetSavedMessage('')
-                                            setBudgetForm(isOpen ? null : budgetFormFor(budgetRow, store))
+                                            setBudgetOpenKey(isOpen ? null : key)
+                                            setBudgetForm(
+                                              !isOpen && findPriceEntries(row.ingredient, effectivePriceBook).length === 0
+                                                ? budgetFormFor(budgetRow, store)
+                                                : null,
+                                            )
                                           }}
                                         >
-                                          {status === 'priced' ? t('改價格') : t('新增價格')}
+                                          {status === 'priced' ? t('編輯價格') : t('新增價格')}
                                         </button>
                                       )}
                                     </div>
-                                    {isOpen && budgetForm && renderBudgetForm(budgetRow, budgetForm)}
+                                    {isOpen && renderBudgetPrices(budgetRow)}
                                   </Fragment>
                                 )
                               })}
@@ -6127,31 +6376,32 @@ function App() {
                                             : t('單位不同，無法估價')}
                                       </span>
                                     </div>
-                                    <select
+                                    <AddableSelect
                                       className={`input input-sm assign-select ${row.assignedStoreId ? '' : 'is-missing'}`}
-                                      aria-label={t('{0} 去哪買', [row.ingredient])}
-                                      value={row.assignedStoreId ?? ''}
-                                      onChange={(event) => {
-                                        const value = event.target.value
+                                      inputClassName="input input-sm assign-select"
+                                      ariaLabel={t('{0} 去哪買', [row.ingredient])}
+                                      value={row.assignedStoreId ? String(row.assignedStoreId) : ''}
+                                      options={[
+                                        { value: '', label: t('尚未分配') },
+                                        ...shoppingStores.map((store) => ({ value: String(store.id), label: t(store.storeName.trim()) || t('未命名商店') })),
+                                        ...storeOptions
+                                          .filter((name) => !shoppingStores.some((store) => store.storeName.trim() === name))
+                                          .map((name) => ({ value: `new:${name}`, label: t('＋ 新增「{0}」', [t(name)]) })),
+                                      ]}
+                                      onChange={(value) => {
                                         if (value.startsWith('new:')) {
                                           assignIngredientToNewStore(row.ingredient, value.slice(4))
                                         } else {
                                           assignIngredientToStore(row.ingredient, value ? Number(value) : null)
                                         }
                                       }}
-                                    >
-                                      <option value="">{t('尚未分配')}</option>
-                                      {shoppingStores.map((store) => (
-                                        <option key={store.id} value={store.id}>
-                                          {store.storeName.trim() || t('未命名商店')}
-                                        </option>
-                                      ))}
-                                      {STORE_KINDS.filter(
-                                        (kind) => !shoppingStores.some((store) => storeKindOf(store.storeName) === kind),
-                                      ).map((kind) => (
-                                        <option key={kind} value={`new:${kind}`}>{t('＋ 新增「{0}」', [t(kind)])}</option>
-                                      ))}
-                                    </select>
+                                      onAdd={(name) => {
+                                        addPriceStore(name)
+                                        assignIngredientToNewStore(row.ingredient, name)
+                                      }}
+                                      addLabel={t('＋ 新增其他商店…')}
+                                      addPlaceholder={t('輸入商店名稱')}
+                                    />
                                   </div>
                                 ))}
                               </div>
@@ -6169,12 +6419,14 @@ function App() {
                     {t('各商店採買清單')}
                   </h3>
                   <div className="store-add">
-                    {STORE_KINDS.map((kind) => (
-                      <button key={kind} type="button" className="btn btn-ghost btn-sm" onClick={() => addShoppingStore(kind)}>
-                        <Icon name="plus" size={14} />
-                        {t(kind)}
-                      </button>
-                    ))}
+                    {storeOptions
+                      .filter((name) => !shoppingStores.some((store) => store.storeName.trim() === name))
+                      .map((name) => (
+                        <button key={name} type="button" className="btn btn-ghost btn-sm" onClick={() => addShoppingStore(name)}>
+                          <Icon name="plus" size={14} />
+                          {t(name)}
+                        </button>
+                      ))}
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => addShoppingStore()}>
                       <Icon name="plus" size={14} />
                       {t('其他商店')}
@@ -6294,22 +6546,22 @@ function App() {
                                     {item.ingredient ? (
                                       <span className="shop-name-text">{ingredientLabel(item.ingredient)}</span>
                                     ) : (
-                                      <select
+                                      <AddableSelect
                                         className="cell-input"
                                         value=""
-                                        aria-label={t('選擇食材')}
-                                        onChange={(event) =>
-                                          updateShoppingStoreItem(store.id, item.id, 'ingredient', event.target.value)
-                                        }
-                                      >
-                                        <option value="">{t('選擇食材')}</option>
-                                        {uniqueSummaryIngredients.map((name) => (
-                                          <option key={name} value={name} disabled={allAssignedIngredients.has(canonicalIngredient(name).key)}>
-                                            {name}
-                                            {allAssignedIngredients.has(canonicalIngredient(name).key) ? t('（已排定）') : ''}
-                                          </option>
-                                        ))}
-                                      </select>
+                                        ariaLabel={t('選擇食材')}
+                                        options={[
+                                          { value: '', label: t('選擇食材') },
+                                          ...uniqueSummaryIngredients.map((name) => {
+                                            const isAssigned = allAssignedIngredients.has(canonicalIngredient(name).key)
+                                            return { value: name, label: `${name}${isAssigned ? t('（已排定）') : ''}`, disabled: isAssigned }
+                                          }),
+                                        ]}
+                                        onChange={(value) => updateShoppingStoreItem(store.id, item.id, 'ingredient', value)}
+                                        onAdd={(name) => updateShoppingStoreItem(store.id, item.id, 'ingredient', name)}
+                                        addLabel={t('＋ 新增食材…')}
+                                        addPlaceholder={t('輸入食材名稱')}
+                                      />
                                     )}
                                     {row && (
                                       <span className="shop-note">
@@ -6491,14 +6743,10 @@ function App() {
           <>
             <header className="page-head page-head-row">
               <div>
-                <h2 className="group-title">{t('價格資料')}</h2>
+                <h3 className="section-title">{t('價格資料')}</h3>
                 <p className="muted small">{t('用來建議去哪買、估算預算。初始資料是 {0} 依公開報導與一般行情整理的估價，請依實際購買價隨時修正； 「秤重」代表依重量計價（例如菜市場每斤），不用整包購買。', [PRICE_REFERENCE_UPDATED])}</p>
               </div>
               <div className="page-head-actions">
-                <button type="button" className="btn btn-ghost" onClick={() => setCurrentTab(BUDGET_TAB)}>
-                  <Icon name="wallet" size={15} />
-                  {t('看預算估算')}
-                </button>
                 <button type="button" className="btn btn-ghost" onClick={() => void runPriceUpdate()} disabled={priceUpdating}>
                   <Icon name="history" size={15} />
                   {priceUpdating ? t('更新中…') : t('立即更新價格')}
@@ -6539,11 +6787,7 @@ function App() {
                 </details>
               )}
             </section>
-            <datalist id="store-kind-options">
-              {STORE_KINDS.map((kind) => (
-                <option key={kind} value={kind} />
-              ))}
-            </datalist>
+            {renderStoreManager()}
             <section className="card">
               <header className="card-head">
                 <input
@@ -6553,7 +6797,7 @@ function App() {
                   placeholder={t('搜尋食材或商店')}
                   aria-label={t('搜尋價格')}
                 />
-                <span className="muted small">{t('共 {0} 筆', [priceBook.length])}</span>
+                <span className="muted small">{t('共 {0} 筆 · 每一格都可以直接修改，按 × 刪除', [priceBook.length])}</span>
               </header>
               <div className="table-scroll">
                 <table className="data-table price-table">
@@ -6574,7 +6818,7 @@ function App() {
                     {priceBook
                       .filter((entry) => {
                         const keyword = priceQuery.trim().toLowerCase()
-                        return !keyword || `${entry.ingredient} ${entry.store} ${entry.spec}`.toLowerCase().includes(keyword)
+                        return !keyword || !entry.ingredient.trim() || `${entry.ingredient} ${entry.store} ${t(entry.store)} ${entry.spec}`.toLowerCase().includes(keyword)
                       })
                       .map((entry) => (
                         <tr key={entry.id}>
@@ -6589,14 +6833,7 @@ function App() {
                             />
                           </td>
                           <td>
-                            <input
-                              className="cell-input"
-                              value={entry.store}
-                              onChange={(event) => updatePriceEntry(entry.id, { store: event.target.value })}
-                              placeholder={t('商店')}
-                              aria-label={t('商店')}
-                              list="store-kind-options"
-                            />
+                            {renderStoreSelect(entry.store, (store) => updatePriceEntry(entry.id, { store }), 'cell-input')}
                           </td>
                           <td className="num">
                             <input
@@ -6604,7 +6841,7 @@ function App() {
                               type="number"
                               min="0"
                               inputMode="numeric"
-                              value={entry.price}
+                              value={effectivePriceBook.find((item) => item.id === entry.id)?.price ?? entry.price}
                               onChange={(event) => updatePriceEntry(entry.id, { price: event.target.value })}
                               aria-label={t('價格')}
                             />
@@ -6615,7 +6852,7 @@ function App() {
                               }
                               return (
                                 <span className="auto-price" title={effective.autoAt}>
-                                  {t('自動 ${0}', [effective.price])}
+                                  {t('自動更新')}
                                 </span>
                               )
                             })()}
