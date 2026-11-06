@@ -139,6 +139,7 @@ label:focus-within > .icon,
   gap: 18px;
   height: 100vh;
   padding: 18px 12px 14px;
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--sidebar-bg);
   color: var(--sidebar-text);
@@ -475,6 +476,7 @@ h1 {
   display: flex;
   flex: 1;
   gap: 6px;
+  min-width: 0;
 }
 
 .sidebar-input {
@@ -854,9 +856,12 @@ h1 {
 .textarea {
   height: auto;
   min-height: 96px;
+  max-height: 420px;
   padding: 8px 12px;
   line-height: 1.6;
   resize: vertical;
+  /* Grows with its text, which can be much longer once translated. */
+  field-sizing: content;
 }
 
 .input::placeholder,
@@ -1095,6 +1100,18 @@ h1 {
   font-size: 17px;
   font-weight: 700;
   transition: background-color 0.15s, box-shadow 0.15s;
+}
+
+/* Long names (translations especially) wrap instead of being cut off. */
+.dish-title-wrap {
+  display: block;
+  height: auto;
+  min-height: 38px;
+  padding: 7px 8px;
+  overflow: hidden;
+  line-height: 1.4;
+  resize: none;
+  field-sizing: content;
 }
 
 .dish-title-input:hover:not(:disabled) {
@@ -2621,6 +2638,8 @@ button.ref-thumb:hover {
   padding: 0 8px;
   color: var(--text-3);
   font-size: 12px;
+  /* Notes can hold long links. */
+  overflow-wrap: anywhere;
 }
 
 .shop-need {
@@ -3010,7 +3029,17 @@ button.ref-thumb:hover {
   }
 
   .card-head {
+    flex-wrap: wrap;
     padding: 6px 6px 6px 4px;
+  }
+
+  .dish-title-wrap {
+    flex: 1 1 40%;
+  }
+
+  .card-head .dish-meta {
+    flex-wrap: wrap;
+    max-width: 100%;
   }
 
   .dish-side {
@@ -3524,6 +3553,41 @@ td.num .merged-from {
   gap: 8px;
   padding: 4px 0;
   border-bottom: 1px solid var(--border-faint);
+}
+
+.content-translation-list {
+  display: grid;
+}
+
+.content-translation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-faint);
+}
+
+.content-translation-source {
+  display: block;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.content-translation-source .chip {
+  margin-right: 6px;
+}
+
+.content-translation-input.textarea {
+  min-height: 36px;
+  padding: 6px 10px;
+}
+
+@media (max-width: 640px) {
+  .content-translation-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
 }
 
 .translation-source {

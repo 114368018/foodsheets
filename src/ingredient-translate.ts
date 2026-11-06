@@ -53,7 +53,7 @@ export const BUILTIN_ZH_EN: Record<string, string> = {
   豆豉辣椒醬: 'Black bean chili sauce', 韓式辣醬: 'Gochujang', 春醬: 'Chunjang', 芝麻醬: 'Sesame paste',
   胡麻醬: 'Roasted sesame dressing', 芥末醬: 'Mustard', 素蠔油: 'Vegetarian oyster sauce', 辣油: 'Chili oil',
   羅望子: 'Tamarind', 泡菜: 'Kimchi', 濃湯粉: 'Soup powder', 蠔油: 'Oyster sauce',
-  鹽: 'Salt', 胡椒鹽: 'Pepper salt', 黑胡椒: 'Black pepper', 黑胡椒粒: 'Black peppercorns', 黑胡椒粉: 'Ground black pepper',
+  鹽: 'Salt', 胡椒鹽: 'Pepper salt', 黑胡椒: 'Black pepper', 黑胡椒粉: 'Ground black pepper',
   白胡椒粉: 'White pepper', 胡椒粉: 'Ground pepper', 辣椒粉: 'Chili powder', 辣椒乾: 'Dried chili', 紅椒粉: 'Paprika',
   小茴香: 'Cumin', 八角: 'Star anise', 桂皮: 'Cinnamon bark', 肉桂粉: 'Cinnamon powder', 香葉: 'Bay leaf',
   香料包: 'Spice bag', 義式香料: 'Italian seasoning', 南薑粉: 'Galangal powder', 黃薑粉: 'Turmeric powder',
@@ -65,10 +65,17 @@ export const BUILTIN_ZH_EN: Record<string, string> = {
   米酒: 'Rice wine', 檸檬汁: 'Lemon juice', 燕麥奶: 'Oat milk', 無糖豆奶: 'Unsweetened soy milk', 豆漿: 'Soy milk',
   椰奶: 'Coconut milk', 味精: 'MSG', 乾海帶: 'Dried kelp', 乾昆布: 'Dried kombu', 玉米罐頭: 'Canned corn',
   冰塊: 'Ice', 水: 'Water', 鮪魚罐頭: 'Canned tuna', 吉利丁: 'Gelatin', 吉利丁粉: 'Gelatin powder', 牛油: 'Beef tallow',
+  // Names already in use, translated by hand.
+  素丸子: 'Vegetarian balls', 節瓜: 'Zucchini', 韓式年糕: 'Korean rice cakes', 百里香粉: 'Ground thyme', 雀巢鷹牌煉乳: 'Nestlé Eagle Brand condensed milk',
+  手標紅茶包: 'ChaTraMue Thai tea bags', '64%巧克力': '64% chocolate', '70%苦甜巧克力': '70% dark chocolate', 一般巴薩米克醋: 'Regular balsamic vinegar',
+  紅甜椒: 'Red bell pepper', 黃甜椒: 'Yellow bell pepper', 韓式泡菜: 'Kimchi', 雀巢三花奶水: 'Carnation evaporated milk', 絞肉: 'Minced meat',
+  火鍋用王子麵: 'Instant noodles for hot pot', 筆管麵: 'Penne', 鹽巴: 'Salt', 蛋液: 'Beaten egg', 義大利香料: 'Italian seasoning', 羅勒葉: 'Basil leaves',
+  玫瑰鹽: 'Pink salt', 山東白菜: 'Napa cabbage (Shandong)', 杏桃果醬: 'Apricot jam', 'Hillfield茄汁焗豆': 'Hillfield baked beans in tomato sauce',
+  紅椒粉酌量: 'Paprika, to taste', 二砂糖: 'Light brown sugar', 糖: 'Sugar', 黑胡椒粒: 'Black peppercorns', 起司條: 'Cheese sticks', 迷你莫札瑞拉起司: 'Mini mozzarella',
   // Names that composing from parts would get wrong (紅糖 is not "red sugar").
   紅糖: 'Brown sugar', 黑醋: 'Black vinegar', 白胡椒: 'White pepper', 黑芝麻: 'Black sesame', 大蒜: 'Garlic',
   小麥: 'Wheat', 白飯: 'Cooked rice', 乾辣椒: 'Dried chili', 小米: 'Millet', 大豆: 'Soybeans', 白木耳: 'White fungus',
-  木耳: 'Wood ear mushroom', 竹筍: 'Bamboo shoot', 小蘇打: 'Baking soda', 中藥: 'Chinese herbs',
+  木耳: 'Wood ear mushroom', 竹筍: 'Bamboo shoot', 小蘇打: 'Baking soda', 麵包粉: 'Breadcrumbs',
 }
 
 // Extra English spellings that should land on a Chinese name.
@@ -152,8 +159,35 @@ const lookupChinese = (name: string, learned: Record<string, string>, index: Rec
 
 // Chinese -> English: learned first, then the dictionary, then the English name someone typed that was
 // translated into this Chinese name (so it stays readable in English mode). Returns null when unknown.
+// Machine results saved before better translations were written. A value an admin typed instead is kept.
+const MACHINE_MISTAKES: Record<string, string> = {
+  'zh:素丸子': 'Plain balls',
+  'zh:手標紅茶包': 'Label black tea bag',
+  'zh:一般巴薩米克醋': 'Balsamic vinegar in general',
+  'zh:紅甜椒': 'Red sweet pepper',
+  'zh:黃甜椒': 'Sweet yellow pepper',
+  'zh:雀巢三花奶水': 'Nestlé sanhua milk',
+  'zh:雀巢鷹牌煉乳': 'Nestlé eagle condensed milk',
+  'zh:火鍋用王子麵': 'Prince noodles for hotpot',
+  'zh:筆管麵': 'Pen-tube noodles',
+  'zh:蛋液': 'Egg liquid',
+  'zh:義大利香料': 'Italian spices',
+  'zh:羅勒葉': 'Basil yeh',
+  'zh:玫瑰鹽': 'Rose salt',
+  'zh:山東白菜': 'Shandong cabbage',
+  'zh:hillfield茄汁焗豆': 'Hillfield tomato sauce baked beans',
+  'zh:紅椒粉酌量': 'Taste the paprika',
+  'zh:二砂糖': 'Two granulated sugar',
+  'zh:百里香粉': 'Thyme powder',
+  'zh:絞肉': 'Ground meat',
+}
+
+// What is saved for a name, ignoring machine results known to be wrong.
+export const savedNameTranslation = (key: string, learned: Record<string, string>): string | undefined =>
+  MACHINE_MISTAKES[key] === learned[key] ? undefined : learned[key]
+
 const lookupExactEnglish = (compact: string, learned: Record<string, string>, zhEn: Record<string, string>): string | null => {
-  const direct = learned[`zh:${compact.toLowerCase()}`] ?? zhEn[compact]
+  const direct = savedNameTranslation(`zh:${compact.toLowerCase()}`, learned) ?? zhEn[compact]
   if (direct) return direct
   const typed = Object.keys(learned).find((key) => key.startsWith('en:') && learned[key] === compact)
   return typed ? typed.charAt(3).toUpperCase() + typed.slice(4) : null
@@ -242,7 +276,7 @@ export const BUILTIN_TOOL_ZH_EN: Record<string, string> = {
   量匙: 'Measuring spoons', 電子秤: 'Kitchen scale', 溫度計: 'Thermometer', 計時器: 'Timer', 裱花袋: 'Piping bag',
   噴槍: 'Kitchen torch', 隔熱手套: 'Oven mitts', 手套: 'Gloves', 鋁箔紙: 'Aluminum foil', 烘焙紙: 'Baking paper',
   保鮮膜: 'Plastic wrap', 廚房紙巾: 'Paper towels', 竹籤: 'Skewers', 牙籤: 'Toothpicks', 抹布: 'Dish cloth',
-  菜瓜布: 'Scrub sponge', 延長線: 'Extension cord', 托盤: 'Tray',
+  菜瓜布: 'Scrub sponge', 延長線: 'Extension cord', 托盤: 'Tray', 瓦斯罐: 'Gas canister', 卡式瓦斯罐: 'Gas canister',
   // Single base words, so names like 瓷鍋 or 紙碗 can be put together from their parts.
   鍋: 'Pot', 盤: 'Plate', 碟子: 'Small plate', 碟: 'Small plate', 杯: 'Cup', 刀: 'Knife', 盆: 'Basin', 匙: 'Spoon',
   鏟: 'Spatula', 鏟子: 'Spatula', 勺: 'Ladle', 勺子: 'Ladle', 籃: 'Basket', 籃子: 'Basket', 架: 'Rack', 架子: 'Rack',
@@ -286,21 +320,60 @@ export const cleanMachineTranslation = (source: string, result: string, toEnglis
   return CJK.test(text) ? text.replace(/\s+/g, '') : null
 }
 
-// Amounts in English mode: "3顆" -> "3 pcs", "1.5 公斤" -> "1.5 kg", "適量" -> "as needed".
-const UNIT_EN: Array<[string, string]> = [
-  ['公斤', 'kg'], ['千克', 'kg'], ['公克', 'g'], ['毫升', 'ml'], ['公升', 'L'], ['大匙', 'tbsp'], ['湯匙', 'tbsp'],
-  ['小匙', 'tsp'], ['茶匙', 'tsp'], ['台斤', 'jin'], ['顆', 'pcs'], ['個', 'pcs'], ['粒', 'pcs'], ['入', 'pcs'],
-  ['條', 'pcs'], ['根', 'pcs'], ['支', 'pcs'], ['把', 'bunch'], ['束', 'bunch'], ['包', 'pack'], ['袋', 'bag'],
-  ['片', 'slices'], ['張', 'sheets'], ['盒', 'box'], ['瓶', 'bottle'], ['罐', 'can'], ['塊', 'block'], ['杯', 'cup'],
-  ['碗', 'bowl'], ['克', 'g'], ['斤', 'jin'], ['兩', 'liang'], ['升', 'L'],
+// Amounts in English mode: "3顆" -> "3 pcs", "1 小撮" -> "1 pinch", "根(大)" -> "pcs (large)", "適量" -> "as needed".
+const COUNT = ['pc', 'pcs'] as const
+const UNIT_EN: Array<[string, string, string?]> = [
+  ['公斤', 'kg'], ['千克', 'kg'], ['公克', 'g'], ['毫升', 'ml'], ['公升', 'L'], ['大匙', 'tbsp'], ['湯匙', 'tbsp'], ['小匙', 'tsp'], ['茶匙', 'tsp'],
+  ['台斤', 'jin'], ['小撮', 'pinch', 'pinches'], ['小包', 'small pack', 'small packs'], ['小把', 'small bunch', 'small bunches'],
+  ['人份', 'serving', 'servings'], ['撮', 'pinch', 'pinches'], ['顆', ...COUNT], ['個', ...COUNT], ['粒', ...COUNT], ['入', ...COUNT], ['條', ...COUNT],
+  ['根', ...COUNT], ['支', ...COUNT], ['朵', ...COUNT], ['隻', ...COUNT], ['尾', ...COUNT], ['台', 'unit', 'units'], ['把', 'bunch', 'bunches'],
+  ['束', 'bunch', 'bunches'], ['包', 'pack', 'packs'], ['袋', 'bag', 'bags'], ['片', 'slice', 'slices'], ['張', 'sheet', 'sheets'], ['盒', 'box', 'boxes'],
+  ['瓶', 'bottle', 'bottles'], ['罐', 'can', 'cans'], ['塊', 'block', 'blocks'], ['杯', 'cup', 'cups'], ['碗', 'bowl', 'bowls'], ['匙', 'spoon', 'spoons'],
+  ['滴', 'drop', 'drops'], ['份', 'serving', 'servings'], ['克', 'g'], ['斤', 'jin'], ['兩', 'liang'], ['升', 'L'],
 ]
-const UNIT_EN_MAP = new Map(UNIT_EN)
-const AMOUNT_UNIT = new RegExp(String.raw`(\d[\d.,/]*)\s*(${UNIT_EN.map(([zh]) => zh).join('|')})`, 'g')
+const UNIT_EN_MAP = new Map(UNIT_EN.map(([zh, singular, plural]) => [zh, { singular, plural: plural ?? singular }]))
+const UNIT_PATTERN = UNIT_EN.map(([zh]) => zh).join('|')
+const AMOUNT_UNIT = new RegExp(String.raw`(\d[\d.,/]*)\s*(${UNIT_PATTERN})`, 'g')
+const BARE_UNIT = new RegExp(UNIT_PATTERN, 'g')
+
+const VAGUE_WORDS: Array<[RegExp, string]> = [
+  [/(?:\d[\d.,/]*\s*)?酌量/g, 'to taste'],
+  [/(?:\d[\d.,/]*\s*)?適量/g, 'as needed'],
+  [/少許|少量|些許|一點/g, 'a little'],
+  [/一些/g, 'some'],
+  [/大約|約/g, 'about '],
+  [/左右/g, ' or so'],
+  [/[(（]\s*大\s*[)）]/g, ' (large)'],
+  [/[(（]\s*中\s*[)）]/g, ' (medium)'],
+  [/[(（]\s*小\s*[)）]/g, ' (small)'],
+]
+
+const cleanWords = (text: string): string => {
+  let result = text
+  VAGUE_WORDS.forEach(([pattern, english]) => {
+    result = result.replace(pattern, english)
+  })
+  return result
+    .replace(/\s*(?:室溫|常溫)/g, ', room temperature')
+    .replace(/([a-zA-Z])\s*[(（]/g, '$1 (')
+    .replace(/）/g, ')')
+    .replace(/^,\s*/, '')
+    .replace(/[ \t]+/g, ' ')
+    .trim()
+}
 
 export const amountToEnglish = (text: string): string =>
-  text
-    .replace(AMOUNT_UNIT, (_match, qty: string, unit: string) => `${qty} ${UNIT_EN_MAP.get(unit)}`)
-    .replace(/適量/g, 'as needed')
-    .replace(/少許/g, 'a little')
+  cleanWords(
+    text.replace(AMOUNT_UNIT, (_match, qty: string, unit: string) => {
+      const english = UNIT_EN_MAP.get(unit)
+      return `${qty} ${Number(qty) === 1 ? english?.singular : english?.plural}`
+    }),
+  )
 
-export const unitToEnglish = (unit: string): string => UNIT_EN_MAP.get(unit.trim()) ?? unit
+// A unit on its own, as in a table's unit column.
+export const unitToEnglish = (unit: string): string =>
+  cleanWords(unit.trim().replace(BARE_UNIT, (zh) => UNIT_EN_MAP.get(zh)?.plural ?? zh))
+
+// Tools are counted, so 把 is a piece here rather than a bunch of herbs.
+export const toolUnitToEnglish = (unit: string): string =>
+  /^(把|支|個|台|組|套)$/.test(unit.trim()) ? 'pcs' : unitToEnglish(unit)

@@ -41,6 +41,8 @@ import {
   isEnglishName,
   learnedKey,
   amountToEnglish,
+  savedNameTranslation,
+  toolUnitToEnglish,
   unitToEnglish,
   BUILTIN_TOOL_ZH_EN,
   toolChineseToEnglish,
@@ -48,6 +50,18 @@ import {
 } from './ingredient-translate'
 import { nextId } from './ids'
 import { AddableSelect } from './AddableSelect'
+import { TranslatedInput, TranslatedTextarea } from './TranslatedField'
+import { CHANGELOG_EN } from './changelog-en'
+import { hasTranslation } from './i18n'
+import {
+  chineseRuns,
+  machineChunks,
+  polishMachineEnglish,
+  textKey,
+  translateChineseRuns,
+  translateLine,
+  translateText,
+} from './content-translate'
 import {
   CATEGORY_ORDER,
   STORE_KINDS,
@@ -104,6 +118,9 @@ const CHANGELOG_TAB = '版本日誌' as const
 const SHOPPING_LIST_TAB = '食材採買' as const
 const PRICE_TAB = '價格參考' as const
 const BUDGET_TAB = '預算估算' as const
+const TRANSLATE_INGREDIENT_TAB = '食材名稱翻譯' as const
+const TRANSLATE_TOOL_TAB = '工具名稱翻譯' as const
+const TRANSLATE_CONTENT_TAB = '料理內容翻譯' as const
 const ADMIN_PASSCODE = 'admin'
 const STORAGE_KEY = 'foodsheets.v1.state'
 const RESET_CONFIRM_PHRASE = '全部歸零'
@@ -170,6 +187,16 @@ const ADMIN_NAV: Array<{
         tabs: [
           { id: INGREDIENT_LIBRARY_TAB, label: '食材建議' },
           { id: TOOL_LIBRARY_TAB, label: '工具建議' },
+        ],
+      },
+      {
+        label: '翻譯管理',
+        icon: 'globe',
+        hint: '英文模式顯示的翻譯。多數會自動翻好，翻錯的可以在這裡修正，大家都會看到修正後的版本。',
+        tabs: [
+          { id: TRANSLATE_CONTENT_TAB, label: '料理內容' },
+          { id: TRANSLATE_INGREDIENT_TAB, label: '食材名稱' },
+          { id: TRANSLATE_TOOL_TAB, label: '工具名稱' },
         ],
       },
     ],
@@ -330,6 +357,8 @@ type SharedState = {
   priceSeedsApplied: string[]
   // The stores offered in dropdowns; stores still used by a price or the shopping list are added to these.
   priceStores: string[]
+  // Translations of free text (dish names, steps, notes) by textKey: machine results and admin corrections.
+  textTranslations: Record<string, string>
   // Admin-defined spellings to merge in summaries: normalized variant -> canonical name.
   ingredientAliases: Record<string, string>
   toolAliases: Record<string, string>
@@ -1003,6 +1032,7 @@ const normalizeSharedState = (input: unknown): SharedState => {
     priceStores: Array.isArray(raw.priceStores)
       ? Array.from(new Set(raw.priceStores.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))))
       : [...STORE_KINDS],
+    textTranslations: toStringRecord(raw.textTranslations),
     ingredientAliases: toStringRecord(raw.ingredientAliases),
     toolAliases: toStringRecord(raw.toolAliases),
     nameTranslations: toStringRecord(raw.nameTranslations),
@@ -1510,6 +1540,7 @@ function App() {
     shoppingStores,
     priceBook,
     priceStores,
+    textTranslations,
     ingredientAliases,
     toolAliases,
     dismissedNamePairs,
@@ -1540,6 +1571,18 @@ function App() {
   const setShoppingStores = sharedFieldSetter('shoppingStores')
   const setPriceBook = sharedFieldSetter('priceBook')
   const setPriceStores = sharedFieldSetter('priceStores')
+  const setTextTranslations = sharedFieldSetter('textTranslations')
+  // Free text in the language being shown; what people typed is never changed.
+  const contentText = useCallback(
+    (text: string) => (lang === 'en' ? translateText(text, textTranslations) : text),
+    [lang, textTranslations],
+  )
+  const noteLabel = (note: string) => note.split(' / ').map(contentText).join(' / ')
+  const storeLabel = (store: string) => contentText(t(store))
+  const listSeparator = lang === 'en' ? ', ' : '、'
+  const colon = lang === 'en' ? ': ' : '：'
+  // What a translated field shows until someone clicks into it.
+  const englishOnly = (text: string) => (lang === 'en' ? text : undefined)
   const storeOptions = Array.from(
     new Set(
       [...priceStores, ...priceBook.map((entry) => entry.store.trim()), ...shoppingStores.map((store) => store.storeName.trim())].filter(
@@ -1593,7 +1636,6 @@ function App() {
   const [priceUpdating, setPriceUpdating] = useState(false)
   const [priceUpdateMessage, setPriceUpdateMessage] = useState('')
   const [aliasDraft, setAliasDraft] = useState({ from: '', to: '' })
-  const [translationsExpanded, setTranslationsExpanded] = useState<Record<string, boolean>>({})
   const [budgetGroupFilter, setBudgetGroupFilter] = useState('')
   const [budgetMissingOnly, setBudgetMissingOnly] = useState(false)
   const [budgetQuery, setBudgetQuery] = useState('')
@@ -1620,7 +1662,7 @@ function App() {
     [groupOrder],
   )
   const isGroupTab = (tab: TabName) => groupOrder.includes(tab)
-  const getGroupName = (groupId: GroupTab) => t(groupData[groupId]?.name || groupId)
+  const getGroupName = (groupId: GroupTab) => contentText(t(groupData[groupId]?.name || groupId))
   const getCollapse = (groupId: GroupTab) => groupCollapseState[groupId] ?? EMPTY_COLLAPSE_STATE
 
   const activeAdminNavItem = ADMIN_NAV_ITEMS.find((item) => item.tabs.some((tab) => tab.id === currentTab))
@@ -1724,6 +1766,10 @@ function App() {
   // the name in the current language. Empty when it would only repeat what was typed.
   const nameHint = (name: string, resolve: typeof canonicalIngredient, label: (name: string) => string) => {
     const typed = name.trim()
+    // In English mode the field itself shows the English name.
+    if (lang === 'en') {
+      return ''
+    }
     const hint = isEnglishName(typed) ? resolve(name).display : label(name)
     return typed && hint !== typed ? hint : ''
   }
@@ -1743,13 +1789,18 @@ function App() {
   }
   const bilingualIngredient = (name: string) => bilingualName(name, canonicalIngredient, ingredientLabel)
   const bilingualTool = (name: string) => bilingualName(name, canonicalTool, toolLabel)
-  const amountLabel = (text: string) => (lang === 'en' ? amountToEnglish(text) : text)
-  const unitLabel = (unit: string) => (lang === 'en' ? unitToEnglish(unit) : unit)
+  const amountLabel = useCallback(
+    (text: string) => (lang === 'en' ? translateChineseRuns(amountToEnglish(text), textTranslations) : text),
+    [lang, textTranslations],
+  )
+  const unitLabel = (unit: string) => (lang === 'en' ? translateChineseRuns(unitToEnglish(unit), textTranslations) : unit)
+  const toolUnitLabel = (unit: string) => (lang === 'en' ? translateChineseRuns(toolUnitToEnglish(unit), textTranslations) : unit)
   // "Frying pan" and "frying  pan" are the same name; "含：…" and "統計為…" only list real differences.
   const sameName = (a: string, b: string) => cleanDisplayName(a).toLowerCase() === cleanDisplayName(b).toLowerCase()
   const renderVariants = (variants: string[], label: string) => {
-    const others = variants.filter((variant) => !sameName(variant, label))
-    return others.length > 0 && <span className="merged-from">{t('含：{0}', [others.join('、')])}</span>
+    // A Chinese spelling tells an English reader nothing.
+    const others = variants.filter((variant) => !sameName(variant, label) && !(lang === 'en' && isChineseName(variant)))
+    return others.length > 0 && <span className="merged-from">{t('含：{0}', [others.join(listSeparator)])}</span>
   }
 
   // Totals per ingredient after unifying spellings (蕃茄 = 番茄) and units (克 = g, 1 公斤 = 1000 g).
@@ -1924,7 +1975,7 @@ function App() {
       nonSampleGroupIds.map((groupId) => {
         const group = groupData[groupId]
         const dishNameById = new Map(
-          group.dishes.map((dish, index) => [dish.id, dish.title.trim() || t('料理 {0}', [index + 1])]),
+          group.dishes.map((dish, index) => [dish.id, contentText(dish.title.trim()) || t('料理 {0}', [index + 1])]),
         )
 
         const rows: GroupIngredientLibraryRow[] = group.ingredientRows
@@ -1943,11 +1994,11 @@ function App() {
 
         return {
           groupId,
-          groupName: t(group.name),
+          groupName: contentText(t(group.name)),
           rows,
         }
       }),
-    [groupData, nonSampleGroupIds, t],
+    [contentText, groupData, nonSampleGroupIds, t],
   )
 
   const toolLibraryByGroup = useMemo(
@@ -1967,11 +2018,11 @@ function App() {
 
         return {
           groupId,
-          groupName: t(group.name),
+          groupName: contentText(t(group.name)),
           rows,
         }
       }),
-    [groupData, nonSampleGroupIds, t],
+    [contentText, groupData, nonSampleGroupIds, t],
   )
 
   // What is still missing per group, so the navigation can show progress at a glance.
@@ -2009,7 +2060,7 @@ function App() {
         }
 
         const dishTitle = group.dishes.find((dish) => dish.id === row.dishId)?.title.trim()
-        const caption = [t(group.name), dishTitle, formatAmount(row.totalQty, row.totalUnit), row.note.trim()]
+        const caption = [contentText(t(group.name)), dishTitle && contentText(dishTitle), amountLabel(formatAmount(row.totalQty, row.totalUnit)), contentText(row.note.trim())]
           .filter(Boolean)
           .join(' · ')
         const key = resolveIngredientName(name, ingredientAliases, nameTranslations).key
@@ -2018,7 +2069,7 @@ function App() {
     })
 
     return map
-  }, [groupData, nonSampleGroupIds, ingredientAliases, nameTranslations, t])
+  }, [amountLabel, contentText, groupData, nonSampleGroupIds, ingredientAliases, nameTranslations, t])
 
   const getIngredientReferences = (name: string): LightboxItem[] =>
     ingredientReferencesByName.get(canonicalIngredient(name).key) ?? []
@@ -2113,11 +2164,11 @@ function App() {
         const unit = canonicalUnit(row.totalUnit)
         const key = `${resolveIngredientName(name, ingredientAliases, nameTranslations).key}|${unit.unit}`
         const byGroup = needsByKey.get(key) ?? new Map<GroupTab, GroupNeed>()
-        const need = byGroup.get(groupId) ?? { groupId, groupName: t(group.name), qty: 0, dishTitles: [] }
+        const need = byGroup.get(groupId) ?? { groupId, groupName: contentText(t(group.name)), qty: 0, dishTitles: [] }
         need.qty += toNumber(row.totalQty) * unit.factor
         const dishTitle = group.dishes.find((dish) => dish.id === row.dishId)?.title.trim()
-        if (dishTitle && !need.dishTitles.includes(dishTitle)) {
-          need.dishTitles.push(dishTitle)
+        if (dishTitle && !need.dishTitles.includes(contentText(dishTitle))) {
+          need.dishTitles.push(contentText(dishTitle))
         }
         byGroup.set(groupId, need)
         needsByKey.set(key, byGroup)
@@ -2149,7 +2200,7 @@ function App() {
           CATEGORY_ORDER.indexOf(a.category) - CATEGORY_ORDER.indexOf(b.category) ||
           a.ingredient.localeCompare(b.ingredient, 'zh-Hant'),
       )
-  }, [groupData, ingredientAdjustments, ingredientAliases, nameTranslations, ingredientSummaryRows, nonSampleGroupIds, effectivePriceBook, priceStores, shoppingStores, t])
+  }, [contentText, groupData, ingredientAdjustments, ingredientAliases, nameTranslations, ingredientSummaryRows, nonSampleGroupIds, effectivePriceBook, priceStores, shoppingStores, t])
 
   // Canonical name -> its overview rows (more than one when groups used units that cannot be converted).
   const overviewByIngredient = useMemo(() => {
@@ -2296,7 +2347,7 @@ function App() {
         (entry) => Number(entry.price) > 0 && (entry.store === store || (kind !== null && storeKindOf(entry.store) === kind)),
       )
       return atStore
-        ? { ...base, status: 'unit-mismatch', label: `${t(atStore.store)} $${atStore.price}/${formatPack({ ...atStore, packUnit: unitLabel(atStore.packUnit) })}` }
+        ? { ...base, status: 'unit-mismatch', label: `${storeLabel(atStore.store)} $${atStore.price}/${formatPack({ ...atStore, packUnit: unitLabel(atStore.packUnit) })}` }
         : { ...base, status: 'no-store-price' }
     }
 
@@ -2306,7 +2357,7 @@ function App() {
     }
     const known = references.find((entry) => Number(entry.price) > 0)
     return known
-      ? { ...base, status: 'unit-mismatch', label: `${t(known.store)} $${known.price}/${formatPack({ ...known, packUnit: unitLabel(known.packUnit) })}` }
+      ? { ...base, status: 'unit-mismatch', label: `${storeLabel(known.store)} $${known.price}/${formatPack({ ...known, packUnit: unitLabel(known.packUnit) })}` }
       : { ...base, status: 'no-price' }
   }
 
@@ -2388,7 +2439,7 @@ function App() {
   const renderStoreSelect = (value: string, onChange: (store: string) => void, className: string) => (
     <AddableSelect
       value={value}
-      options={Array.from(new Set([value, ...storeOptions].filter(Boolean))).map((store) => ({ value: store, label: t(store) }))}
+      options={Array.from(new Set([value, ...storeOptions].filter(Boolean))).map((store) => ({ value: store, label: storeLabel(store) }))}
       onChange={onChange}
       onAdd={(name) => {
         addPriceStore(name)
@@ -2428,7 +2479,11 @@ function App() {
                     }
                   }}
                 />
-                <span className="muted small">{t('{0} 筆價格', [priceBook.filter((entry) => entry.store.trim() === store).length])}</span>
+                <span className="muted small">
+                  {[lang === 'en' && storeLabel(store) !== store ? storeLabel(store) : '', t('{0} 筆價格', [priceBook.filter((entry) => entry.store.trim() === store).length])]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
                 <button
                   type="button"
                   className="icon-btn icon-btn-danger"
@@ -2484,7 +2539,7 @@ function App() {
               {entry.id < 0 ? (
                 <>
                   <span className="budget-price-readonly">
-                    {t(entry.store)} ${entry.price}/{formatPack({ ...entry, packUnit: unitLabel(entry.packUnit) })}
+                    {storeLabel(entry.store)} ${entry.price}/{formatPack({ ...entry, packUnit: unitLabel(entry.packUnit) })}
                     <span className="muted small"> {t('每日市場行情')}</span>
                   </span>
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => makePriceEditable(entry)}>
@@ -2521,9 +2576,10 @@ function App() {
                   </label>
                   <label className="budget-field">
                     <span>{t('單位')}</span>
-                    <input
+                    <TranslatedInput
                       className="input input-sm"
                       value={entry.packUnit}
+                      display={englishOnly(unitLabel(entry.packUnit))}
                       onChange={(event) => updatePriceEntry(entry.id, { packUnit: event.target.value })}
                     />
                   </label>
@@ -2631,7 +2687,12 @@ function App() {
         </label>
         <label className="budget-field">
           <span>{t('單位')}</span>
-          <input className="input input-sm" value={form.packUnit} onChange={(event) => update({ packUnit: event.target.value })} />
+          <TranslatedInput
+            className="input input-sm"
+            value={form.packUnit}
+            display={englishOnly(unitLabel(form.packUnit))}
+            onChange={(event) => update({ packUnit: event.target.value })}
+          />
         </label>
         <label className="budget-check">
           <input type="checkbox" className="checkbox" checked={form.loose} onChange={(event) => update({ loose: event.target.checked })} />
@@ -2780,7 +2841,7 @@ function App() {
   const removeDish = (groupName: GroupTab, dishId: number) => {
     const dishIndex = groupData[groupName].dishes.findIndex((dish) => dish.id === dishId)
     const dishTitle = groupData[groupName].dishes[dishIndex]?.title.trim()
-    const dishLabel = dishTitle ? `「${dishTitle}」` : dishIndex >= 0 ? t('料理 {0}', [dishIndex + 1]) : t('此料理')
+    const dishLabel = dishTitle ? `「${contentText(dishTitle)}」` : dishIndex >= 0 ? t('料理 {0}', [dishIndex + 1]) : t('此料理')
     const confirmed = window.confirm(t('確定要刪除{0}嗎？該料理下的食材將一併刪除。', [dishLabel]))
     if (!confirmed) {
       return
@@ -3572,7 +3633,7 @@ function App() {
             const payload = (await response.json()) as { responseData?: { translatedText?: string } }
             const cleaned = cleanMachineTranslation(name, payload.responseData?.translatedText ?? '', toEnglish)
             if (cleaned) {
-              results[learnedKey(name)] = cleaned
+              results[learnedKey(name)] = toEnglish ? (polishMachineEnglish(name, cleaned) ?? cleaned) : cleaned
             }
           } catch {
             // Offline or rate-limited: the name simply stays untranslated for now.
@@ -3590,6 +3651,104 @@ function App() {
 
     return () => window.clearTimeout(timer)
   }, [groupData, groupOrder, ingredientAliases, ingredientLibrary, lang, nameTranslations, shoppingStores, toolAliases, toolLibrary])
+
+  // Everything people typed that has to read in English, with what kind of text it is.
+  const contentSources = useMemo(() => {
+    const sources = new Map<string, string>()
+    const add = (raw: string, kind: string) => {
+      raw.split(/\r?\n/).forEach((line) => {
+        const text = line.trim()
+        if (text && isChineseName(text) && !sources.has(text)) {
+          sources.set(text, kind)
+        }
+      })
+    }
+    groupOrder.forEach((groupId) => {
+      const group = groupData[groupId]
+      if (!group) {
+        return
+      }
+      if (!hasTranslation(group.name)) {
+        add(group.name, '組別')
+      }
+      add(group.cuisineType, '料理種類')
+      group.dishes.forEach((dish) => {
+        add(dish.title, '料理名稱')
+        add(dish.steps, '料理步驟')
+      })
+      group.ingredientRows.forEach((row) => {
+        add(row.note, '備註')
+        chineseRuns(amountToEnglish(`${row.totalQty}${row.totalUnit}`)).forEach((run) => add(run, '單位'))
+        chineseRuns(amountToEnglish(`${row.perServingQty}${row.perServingUnit}`)).forEach((run) => add(run, '單位'))
+      })
+      group.toolRows.forEach((row) => {
+        add(row.note, '備註')
+        chineseRuns(toolUnitToEnglish(row.unit)).forEach((run) => add(run, '單位'))
+      })
+    })
+    priceBook.forEach((entry) => add(entry.spec, '規格說明'))
+    priceStores.forEach((store) => {
+      if (!hasTranslation(store)) {
+        add(store, '商店')
+      }
+    })
+    shoppingStores.forEach((store) => {
+      if (!hasTranslation(store.storeName.trim())) {
+        add(store.storeName, '商店')
+      }
+    })
+    return Array.from(sources, ([text, kind]) => ({ text, kind }))
+  }, [groupData, groupOrder, priceBook, priceStores, shoppingStores])
+
+  // Lines nobody has translated yet go to the free service once, only while someone reads the English
+  // interface. Results are shared through the project data, so each line is translated one time.
+  const textsInFlightRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (lang !== 'en') {
+      return
+    }
+    const pending = contentSources
+      .map(({ text }) => text)
+      .filter((text) => translateLine(text, textTranslations) === null && !textsInFlightRef.current.has(text))
+      .slice(0, 6)
+    if (pending.length === 0) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      pending.forEach((text) => textsInFlightRef.current.add(text))
+      void (async () => {
+        const results: Record<string, string> = {}
+        for (const text of pending) {
+          const parts: string[] = []
+          for (const chunk of machineChunks(text)) {
+            try {
+              const response = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(chunk)}&langpair=zh-TW|en`)
+              const payload = (await response.json()) as { responseData?: { translatedText?: string } }
+              const english = polishMachineEnglish(chunk, payload.responseData?.translatedText ?? '')
+              if (english) {
+                parts.push(english)
+              }
+            } catch {
+              // Offline or rate-limited: the line stays as written for now.
+            }
+          }
+          if (parts.length === machineChunks(text).length) {
+            results[textKey(text)] = parts.join(' ')
+          }
+        }
+        if (Object.keys(results).length > 0) {
+          // Existing (possibly admin-corrected) translations win over new machine ones.
+          setSyncState((previous) => ({
+            ...previous,
+            data: { ...previous.data, textTranslations: { ...results, ...previous.data.textTranslations } },
+          }))
+        }
+      })()
+    }, 1500)
+
+    return () => window.clearTimeout(timer)
+  }, [contentSources, lang, textTranslations])
 
   // Push unsynced edits. The transaction merges them onto the latest cloud state,
   // so concurrent edits from other groups are never overwritten.
@@ -3859,13 +4018,13 @@ function App() {
   // Plain-text list to paste into LINE for whoever goes shopping.
   const copyStoreList = async (store: ShoppingStore) => {
     const items = store.items.filter((item) => item.ingredient.trim())
-    const lines = [t('【{0}】共 {1} 項', [store.storeName.trim() || t('採買清單'), items.length])]
+    const lines = [t('【{0}】共 {1} 項', [storeLabel(store.storeName.trim()) || t('採買清單'), items.length])]
     groupStoreItemsByCategory(items).forEach(({ category, items: sectionItems }) => {
       lines.push('', `▍${t(category || '其他')}`)
       sectionItems.forEach((item) => {
         const row = findOverview(item.ingredient)
         const amount = describeNeed(item.ingredient, item.ownedQty ?? '')?.remaining ?? ''
-        const note = row?.note ? `（${row.note}）` : ''
+        const note = row?.note ? (lang === 'en' ? ` (${noteLabel(row.note)})` : `（${row.note}）`) : ''
         lines.push(`${item.purchased ? '☑' : '☐'} ${bilingualIngredient(item.ingredient)} ${amount}${note}`.trim())
       })
     })
@@ -4007,13 +4166,13 @@ function App() {
       const { dish, dishNumber } = dishEntries[index]
       const stepLines = dish.steps
         .split(/\r?\n/)
-        .map((line) => line.trim())
+        .map((line) => contentText(line.trim()))
         .filter(Boolean)
       const ingredients = groupData[groupId].ingredientRows.filter((row) => row.dishId === dish.id && row.ingredient.trim())
 
       children.push(
         new Paragraph({
-          text: t('第{0}道料理：{1}', [dishNumber, dish.title.trim() || t('未命名料理')]),
+          text: t('第{0}道料理：{1}', [dishNumber, contentText(dish.title.trim()) || t('未命名料理')]),
           heading: headingLevel,
           pageBreakBefore: index > 0 || firstDishOnNewPage,
           spacing: { before: 120, after: 120 },
@@ -4043,7 +4202,7 @@ function App() {
         ingredients.forEach((row) => {
           const amount = amountLabel(formatAmount(row.totalQty, row.totalUnit))
           const perServing = amountLabel(formatAmount(row.perServingQty, row.perServingUnit))
-          const details = [amount, perServing && t('一份 {0}', [perServing]), row.note.trim()].filter(Boolean).join('，')
+          const details = [amount, perServing && t('一份 {0}', [perServing]), contentText(row.note.trim())].filter(Boolean).join(lang === 'en' ? ', ' : '，')
           children.push(
             new Paragraph({
               children: [
@@ -4093,7 +4252,7 @@ function App() {
         spacing: { after: row.note.trim() ? 40 : 120 },
       }),
       ...(row.note.trim()
-        ? [new Paragraph({ children: [new TextRun({ text: `${t('備註')}：${row.note.trim()}`, color: '475569' })], spacing: { after: 120 } })]
+        ? [new Paragraph({ children: [new TextRun({ text: `${t('備註')}${colon}${contentText(row.note.trim())}`, color: '475569' })], spacing: { after: 120 } })]
         : []),
     ])
   }
@@ -4187,9 +4346,9 @@ function App() {
 
   const groupMetaParagraph = (groupId: GroupTab): Paragraph[] => {
     const group = groupData[groupId]
-    const meta = [group.teamName.trim() && `${t('廚神')}：${group.teamName.trim()}`, group.cuisineType.trim() && `${t('料理種類')}：${group.cuisineType.trim()}`]
+    const meta = [group.teamName.trim() && `${t('廚神')}${colon}${group.teamName.trim()}`, group.cuisineType.trim() && `${t('料理種類')}${colon}${contentText(group.cuisineType.trim())}`]
       .filter(Boolean)
-      .join('　')
+      .join(lang === 'en' ? '   ' : '　')
     return meta ? [new Paragraph({ children: [new TextRun({ text: meta, color: '475569' })], alignment: AlignmentType.CENTER, spacing: { after: 240 } })] : []
   }
 
@@ -4301,7 +4460,7 @@ function App() {
           onClick={() =>
             openLightbox({
               title: row.ingredient.trim() || t('食材照片'),
-              items: [{ url: image.url, caption: [formatAmount(row.totalQty, row.totalUnit), row.note.trim()].filter(Boolean).join(' · ') }],
+              items: [{ url: image.url, caption: [amountLabel(formatAmount(row.totalQty, row.totalUnit)), contentText(row.note.trim())].filter(Boolean).join(' · ') }],
               onRemove: canEditActiveGroup ? () => removeIngredientImage(groupName, row.id) : undefined,
             })
           }
@@ -4390,7 +4549,7 @@ function App() {
     )
     const aliases = Object.entries(isIngredient ? ingredientAliases : toolAliases)
     const conflicts = isIngredient
-      ? Array.from(new Set(ingredientSummaryRows.filter((row) => row.unitConflict).map((row) => row.ingredient)))
+      ? Array.from(new Set(ingredientSummaryRows.filter((row) => row.unitConflict).map((row) => ingredientLabel(row.ingredient))))
       : []
     const label = isIngredient ? t('食材') : t('工具')
     const datalistId = `merge-${kind}-names`
@@ -4427,7 +4586,7 @@ function App() {
           )}
 
           {conflicts.length > 0 && (
-            <p className="merge-warning">{t('「{0}」有些組用重量、有些用個數（例如 g 和顆），無法自動相加，已分開列出並標示「單位不一」。 可以用調整量補正，或請該組改成同一種單位。', [conflicts.join('、')])}</p>
+            <p className="merge-warning">{t('「{0}」有些組用重量、有些用個數（例如 g 和顆），無法自動相加，已分開列出並標示「單位不一」。 可以用調整量補正，或請該組改成同一種單位。', [conflicts.join(listSeparator)])}</p>
           )}
 
           <form
@@ -4504,14 +4663,11 @@ function App() {
     const missing = names.filter((name) =>
       isChineseName(name) ? !translator.toEnglish(name, nameTranslations) : !translator.toChinese(name, nameTranslations),
     ).length
-    const expanded = translationsExpanded[kind] === true
-    const title = isIngredient ? t('食材中英對照') : t('工具中英對照')
 
     return (
       <section className="card">
         <header className="card-head">
-          {renderCollapseButton(!expanded, () => setTranslationsExpanded((previous) => ({ ...previous, [kind]: !expanded })), title)}
-          <h3 className="card-title">{title}</h3>
+          <h3 className="card-title">{isIngredient ? t('食材名稱翻譯') : t('工具名稱翻譯')}</h3>
           <span className="muted small merge-intro">
             {isIngredient
               ? t('英文和中文輸入的同一種食材會自動合併；沒有內建翻譯的會自動翻譯一次，翻錯可以在這裡改。')
@@ -4519,23 +4675,79 @@ function App() {
           </span>
           {missing > 0 && <span className="chip chip-warn">{t('{0} 項待翻譯', [missing])}</span>}
         </header>
-        {expanded && (
-          <div className="card-body">
-            <div className="translation-grid">
-              {names.map((name) => {
-                const key = learnedKey(name)
-                const builtin = isChineseName(name) ? translator.builtin[name.replace(/\s+/g, '')] : translator.toChinese(name, {})
-                const learned = nameTranslations[key]
+        <div className="card-body">
+          <div className="translation-grid">
+            {names.map((name) => {
+              const key = learnedKey(name)
+              const builtin = isChineseName(name) ? translator.toEnglish(name, {}) : translator.toChinese(name, {})
+              const saved = savedNameTranslation(key, nameTranslations)
+              return (
+                <label key={name} className="translation-row">
+                  <span className="translation-source">{name}</span>
+                  <input
+                    className="cell-input"
+                    value={saved ?? ''}
+                    placeholder={builtin ?? t('翻譯中…')}
+                    onChange={(event) => {
+                      const value = event.target.value
+                      setNameTranslations((previous) => {
+                        const next = { ...previous }
+                        if (value.trim()) {
+                          next[key] = value
+                        } else {
+                          delete next[key]
+                        }
+                        return next
+                      })
+                    }}
+                    aria-label={t('{0} 的翻譯', [name])}
+                  />
+                  <span className="muted small">{saved ? t('已儲存') : builtin ? t('內建') : t('等待翻譯')}</span>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  // Admin list of everything else people typed: dish names, each line of the steps, notes and so on.
+  const renderContentTranslations = () => {
+    const missing = contentSources.filter(({ text }) => translateLine(text, textTranslations) === null).length
+
+    return (
+      <section className="card">
+        <header className="card-head">
+          <h3 className="card-title">{t('料理內容翻譯')}</h3>
+          <span className="muted small merge-intro">
+            {t('料理名稱、步驟和備註在英文模式的翻譯，翻錯可以在這裡改；清空就恢復自動翻譯。人名不會翻譯。')}
+          </span>
+          {missing > 0 && <span className="chip chip-warn">{t('{0} 項待翻譯', [missing])}</span>}
+        </header>
+        <div className="card-body">
+          {contentSources.length === 0 ? (
+            <p className="empty">{t('目前沒有需要翻譯的內容。')}</p>
+          ) : (
+            <div className="content-translation-list">
+              {contentSources.map(({ text, kind }) => {
+                const key = textKey(text)
+                const saved = textTranslations[key]
+                const automatic = translateLine(text, {})
                 return (
-                  <label key={name} className="translation-row">
-                    <span className="translation-source">{name}</span>
-                    <input
-                      className="cell-input"
-                      value={learned ?? ''}
-                      placeholder={builtin ?? t('翻譯中…')}
+                  <label key={text} className="content-translation-row">
+                    <span className="content-translation-source">
+                      <span className="chip chip-optional">{t(kind)}</span>
+                      {text}
+                    </span>
+                    <textarea
+                      className="input textarea content-translation-input"
+                      rows={1}
+                      value={saved ?? ''}
+                      placeholder={automatic ?? t('翻譯中…')}
                       onChange={(event) => {
                         const value = event.target.value
-                        setNameTranslations((previous) => {
+                        setTextTranslations((previous) => {
                           const next = { ...previous }
                           if (value.trim()) {
                             next[key] = value
@@ -4545,15 +4757,14 @@ function App() {
                           return next
                         })
                       }}
-                      aria-label={t('{0} 的翻譯', [name])}
+                      aria-label={t('{0} 的翻譯', [text])}
                     />
-                    <span className="muted small">{learned ? t('已儲存') : builtin ? t('內建') : t('等待翻譯')}</span>
                   </label>
                 )
               })}
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </section>
     )
   }
@@ -4826,7 +5037,7 @@ function App() {
                     >
                       {activeDishes.map((dish, index) => (
                         <option key={dish.id} value={dish.id}>
-                          {index + 1}. {dish.title.trim() || t('未命名料理')}
+                          {index + 1}. {contentText(dish.title.trim()) || t('未命名料理')}
                         </option>
                       ))}
                     </select>
@@ -4882,9 +5093,10 @@ function App() {
                   <span className="field-label">
                     {t('料理種類')}{' '}<span className="req">*</span>
                   </span>
-                  <input
+                  <TranslatedInput
                     className={`input ${!groupData[activeGroup].cuisineType.trim() ? 'is-missing' : ''}`}
                     value={groupData[activeGroup].cuisineType}
+                    display={englishOnly(contentText(groupData[activeGroup].cuisineType))}
                     onChange={(event) => updateGroupMeta(activeGroup, 'cuisineType', event.target.value)}
                     placeholder={t('例如：義式、台式、日式')}
                   />
@@ -4935,10 +5147,18 @@ function App() {
                   <header className="card-head dish-head">
                     {renderCollapseButton(isDishCollapsed, () => toggleDishCollapse(activeGroup, dish.id), t('料理'))}
                     <span className="dish-index">{dishIndex + 1}</span>
-                    <input
-                      className={`dish-title-input ${!dish.title.trim() ? 'is-missing' : ''}`}
+                    <TranslatedTextarea
+                      className={`dish-title-input dish-title-wrap ${!dish.title.trim() ? 'is-missing' : ''}`}
+                      rows={1}
                       value={dish.title}
-                      onChange={(event) => updateDish(activeGroup, dish.id, 'title', event.target.value)}
+                      display={englishOnly(contentText(dish.title))}
+                      onChange={(event) => updateDish(activeGroup, dish.id, 'title', event.target.value.replace(/\r?\n/g, ' '))}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          event.currentTarget.blur()
+                        }
+                      }}
                       placeholder={t('料理名稱（必填）')}
                       aria-label={t('料理 {0} 名稱', [dishIndex + 1])}
                       disabled={!canEditActiveGroup}
@@ -5007,9 +5227,10 @@ function App() {
                                     >
                                       <td className="cell-photo">{renderIngredientPhoto(activeGroup, row)}</td>
                                       <td className="cell-name">
-                                        <input
+                                        <TranslatedInput
                                           className="cell-input"
                                           value={row.ingredient}
+                                          display={englishOnly(ingredientLabel(row.ingredient))}
                                           onChange={(event) =>
                                             updateIngredientRow(activeGroup, row.id, 'ingredient', event.target.value)
                                           }
@@ -5027,9 +5248,10 @@ function App() {
                                         )}
                                       </td>
                                       <td className="cell-amount" data-label={t('總量 *')}>
-                                        <input
+                                        <TranslatedInput
                                           className={`cell-input ${isInvalid ? 'is-missing' : ''}`}
                                           value={row.totalQty + row.totalUnit}
+                                          display={englishOnly(amountLabel(row.totalQty + row.totalUnit))}
                                           onChange={(event) =>
                                             updateIngredientAmount(activeGroup, row.id, 'total', event.target.value)
                                           }
@@ -5042,9 +5264,10 @@ function App() {
                                         />
                                       </td>
                                       <td className="cell-amount" data-label={t('一份量')}>
-                                        <input
+                                        <TranslatedInput
                                           className="cell-input"
                                           value={row.perServingQty + row.perServingUnit}
+                                          display={englishOnly(amountLabel(row.perServingQty + row.perServingUnit))}
                                           onChange={(event) =>
                                             updateIngredientAmount(activeGroup, row.id, 'perServing', event.target.value)
                                           }
@@ -5056,9 +5279,10 @@ function App() {
                                         />
                                       </td>
                                       <td className="cell-note">
-                                        <input
+                                        <TranslatedInput
                                           className="cell-input"
                                           value={row.note}
+                                          display={englishOnly(contentText(row.note))}
                                           onChange={(event) =>
                                             updateIngredientRow(activeGroup, row.id, 'note', event.target.value)
                                           }
@@ -5172,7 +5396,7 @@ function App() {
                                     onClick={() =>
                                       openLightbox(
                                         {
-                                          title: dish.title.trim() || t('料理 {0}', [dishIndex + 1]),
+                                          title: contentText(dish.title.trim()) || t('料理 {0}', [dishIndex + 1]),
                                           items: dish.images.map((item) => ({ url: item.url, caption: '' })),
                                         },
                                         imageIndex,
@@ -5182,7 +5406,7 @@ function App() {
                                   >
                                     <img
                                       src={image.url}
-                                      alt={t('{0} 圖片 {1}', [dish.title || t('料理 {0}', [dishIndex + 1]), imageIndex + 1])}
+                                      alt={t('{0} 圖片 {1}', [contentText(dish.title) || t('料理 {0}', [dishIndex + 1]), imageIndex + 1])}
                                     />
                                   </button>
                                   {canEditActiveGroup && (
@@ -5257,15 +5481,21 @@ function App() {
                               {t('料理步驟')}{' '}<span className="muted">{t('每行一個步驟')}</span>
                             </span>
                             {canEditActiveGroup ? (
-                              <textarea
-                                className="input textarea"
-                                value={dish.steps}
-                                onChange={(event) => updateDish(activeGroup, dish.id, 'steps', event.target.value)}
-                                placeholder={t('例如：\n番茄切塊、雞蛋打散\n熱鍋下油炒蛋\n加入番茄拌炒調味')}
-                                rows={4}
-                              />
+                              <>
+                                <TranslatedTextarea
+                                  className="input textarea"
+                                  value={dish.steps}
+                                  display={englishOnly(contentText(dish.steps))}
+                                  onChange={(event) => updateDish(activeGroup, dish.id, 'steps', event.target.value)}
+                                  placeholder={t('例如：\n番茄切塊、雞蛋打散\n熱鍋下油炒蛋\n加入番茄拌炒調味')}
+                                  rows={4}
+                                />
+                                {lang === 'en' && isChineseName(dish.steps) && (
+                                  <span className="muted small">{t('自動翻譯；點一下可編輯原文')}</span>
+                                )}
+                              </>
                             ) : (
-                              <pre className="steps-readonly">{dish.steps.trim() || t('（尚未填寫）')}</pre>
+                              <pre className="steps-readonly">{contentText(dish.steps.trim()) || t('（尚未填寫）')}</pre>
                             )}
                           </label>
                         </div>
@@ -5317,9 +5547,10 @@ function App() {
                           return (
                             <tr key={row.id} className={isInvalid ? 'is-invalid' : ''}>
                               <td className="cell-name" data-label={t('工具')}>
-                                <input
+                                <TranslatedInput
                                   className="cell-input"
                                   value={row.tool}
+                                  display={englishOnly(toolLabel(row.tool))}
                                   onChange={(event) => updateToolRow(activeGroup, row.id, 'tool', event.target.value)}
                                   placeholder={isBlankRow ? t('例如：炒鍋') : t('工具名稱')}
                                   aria-label={t('工具')}
@@ -5343,18 +5574,20 @@ function App() {
                                 />
                               </td>
                               <td className="cell-unit" data-label={t('單位')}>
-                                <input
+                                <TranslatedInput
                                   className="cell-input"
                                   value={row.unit}
+                                  display={englishOnly(toolUnitLabel(row.unit))}
                                   onChange={(event) => updateToolRow(activeGroup, row.id, 'unit', event.target.value)}
                                   placeholder={isBlankRow ? t('個') : ''}
                                   aria-label={t('單位')}
                                 />
                               </td>
                               <td className="cell-note" data-label={t('備註')}>
-                                <input
+                                <TranslatedInput
                                   className="cell-input"
                                   value={row.note}
+                                  display={englishOnly(contentText(row.note))}
                                   onChange={(event) => updateToolRow(activeGroup, row.id, 'note', event.target.value)}
                                   placeholder={t('備註')}
                                   aria-label={t('備註')}
@@ -5421,10 +5654,13 @@ function App() {
           </header>
         )}
 
+        {currentTab === TRANSLATE_CONTENT_TAB && adminUnlocked && renderContentTranslations()}
+        {currentTab === TRANSLATE_INGREDIENT_TAB && adminUnlocked && renderTranslationTable('ingredient')}
+        {currentTab === TRANSLATE_TOOL_TAB && adminUnlocked && renderTranslationTable('tool')}
+
         {currentTab === '食材總表' && adminUnlocked && (
           <>
           {renderNameMerge('ingredient')}
-          {renderTranslationTable('ingredient')}
           <section className="card">
             <header className="card-head">
               <h3 className="card-title">{t('食材總表')}</h3>
@@ -5472,7 +5708,7 @@ function App() {
                                 [key]: event.target.checked,
                               }))
                             }
-                            aria-label={t('標記 {0} 是否已備料', [row.ingredient])}
+                            aria-label={t('標記 {0} 是否已備料', [ingredientLabel(row.ingredient)])}
                           />
                         </td>
                         <td className="strong">
@@ -5486,10 +5722,10 @@ function App() {
                           </span>
                         </td>
                         <td className="num">{row.perServingMixed ? t('單位不一') : formatNumber(row.sumPerServingQty)}</td>
-                        <td>{row.perServingMixed ? '' : row.perServingUnit}</td>
+                        <td>{row.perServingMixed ? '' : unitLabel(row.perServingUnit)}</td>
                         <td className="num">
                           {formatNumber(row.sumTotalQty)}
-                          {row.vagueAmounts.length > 0 && <span className="merged-from">{t('另有：{0}', [row.vagueAmounts.join('、')])}</span>}
+                          {row.vagueAmounts.length > 0 && <span className="merged-from">{t('另有：{0}', [row.vagueAmounts.join(listSeparator)])}</span>}
                         </td>
                         <td className="num">
                           <input
@@ -5503,12 +5739,12 @@ function App() {
                               }))
                             }
                             placeholder="0"
-                            aria-label={t('{0} 調整量', [row.ingredient])}
+                            aria-label={t('{0} 調整量', [ingredientLabel(row.ingredient)])}
                           />
                         </td>
                         <td className="num strong">{formatNumber(finalTotal)}</td>
-                        <td>{lang === 'en' ? unitToEnglish(row.totalUnit) : row.totalUnit}</td>
-                        <td className="muted">{row.note}</td>
+                        <td>{unitLabel(row.totalUnit)}</td>
+                        <td className="muted">{noteLabel(row.note)}</td>
                       </tr>
                     )
                   })}
@@ -5522,7 +5758,6 @@ function App() {
         {currentTab === '工具總表' && adminUnlocked && (
           <>
           {renderNameMerge('tool')}
-          {renderTranslationTable('tool')}
           <section className="card">
             <header className="card-head">
               <h3 className="card-title">{t('工具總表')}</h3>
@@ -5568,7 +5803,7 @@ function App() {
                                 [key]: event.target.checked,
                               }))
                             }
-                            aria-label={t('標記 {0} 是否已備妥', [row.tool])}
+                            aria-label={t('標記 {0} 是否已備妥', [toolLabel(row.tool)])}
                           />
                         </td>
                         <td className="strong">
@@ -5590,12 +5825,12 @@ function App() {
                               }))
                             }
                             placeholder="0"
-                            aria-label={t('{0} 調整量', [row.tool])}
+                            aria-label={t('{0} 調整量', [toolLabel(row.tool)])}
                           />
                         </td>
                         <td className="num strong">{formatNumber(finalTotal)}</td>
-                        <td>{lang === 'en' ? unitToEnglish(row.unit) : row.unit}</td>
-                        <td className="muted">{row.note}</td>
+                        <td>{toolUnitLabel(row.unit)}</td>
+                        <td className="muted">{noteLabel(row.note)}</td>
                       </tr>
                     )
                   })}
@@ -5636,9 +5871,8 @@ function App() {
               ) : (
                 <ul className="tag-list">
                   {toolLibrary.map((name) => (
-                    <li key={name} className="tag">
-                      {name}
-                      {lang === 'en' && !sameName(toolLabel(name), name) && <span className="tag-translation">{toolLabel(name)}</span>}
+                    <li key={name} className="tag" title={lang === 'en' ? name : undefined}>
+                      {lang === 'en' ? toolLabel(name) : name}
                       <button
                         type="button"
                         className="tag-remove"
@@ -5685,11 +5919,8 @@ function App() {
               ) : (
                 <ul className="tag-list">
                   {ingredientLibrary.map((name) => (
-                    <li key={name} className="tag">
-                      {name}
-                      {lang === 'en' && !sameName(ingredientLabel(name), name) && (
-                        <span className="tag-translation">{ingredientLabel(name)}</span>
-                      )}
+                    <li key={name} className="tag" title={lang === 'en' ? name : undefined}>
+                      {lang === 'en' ? ingredientLabel(name) : name}
                       <button
                         type="button"
                         className="tag-remove"
@@ -5770,7 +6001,7 @@ function App() {
                                         [preparedKey]: event.target.checked,
                                       }))
                                     }
-                                    aria-label={t('標記 {0} {1} 是否已備料', [groupName, row.ingredient])}
+                                    aria-label={t('標記 {0} {1} 是否已備料', [groupName, ingredientLabel(row.ingredient)])}
                                   />
                                 </td>
                                 <td className="muted">{row.dishName}</td>
@@ -5786,24 +6017,24 @@ function App() {
                                             items: [{ url: rowImage.url, caption: `${groupName} · ${row.dishName}` }],
                                           })
                                         }
-                                        aria-label={t('查看 {0} 的照片', [row.ingredient])}
+                                        aria-label={t('查看 {0} 的照片', [ingredientLabel(row.ingredient)])}
                                       >
                                         <img src={rowImage.url} alt="" loading="lazy" />
                                       </button>
                                     )}
                                     <span className="merged-name">
-                                      {row.ingredient}
-                                      {!sameName(ingredientLabel(row.ingredient), row.ingredient) && (
+                                      {lang === 'en' ? ingredientLabel(row.ingredient) : row.ingredient}
+                                      {lang !== 'en' && !sameName(ingredientLabel(row.ingredient), row.ingredient) && (
                                         <span className="merged-from">{t('統計為「{0}」', [ingredientLabel(row.ingredient)])}</span>
                                       )}
                                     </span>
                                   </span>
                                 </td>
                                 <td className="num">{row.perServingQty || '–'}</td>
-                                <td>{row.perServingUnit || '–'}</td>
+                                <td>{unitLabel(row.perServingUnit) || '–'}</td>
                                 <td className="num">{row.totalQty || '–'}</td>
-                                <td>{row.totalUnit || '–'}</td>
-                                <td className="muted">{row.note}</td>
+                                <td>{unitLabel(row.totalUnit) || '–'}</td>
+                                <td className="muted">{contentText(row.note)}</td>
                               </tr>
                             )
                           })}
@@ -5877,20 +6108,20 @@ function App() {
                                         [preparedKey]: event.target.checked,
                                       }))
                                     }
-                                    aria-label={t('標記 {0} {1} 是否已備妥', [groupName, row.tool])}
+                                    aria-label={t('標記 {0} {1} 是否已備妥', [groupName, toolLabel(row.tool)])}
                                   />
                                 </td>
                                 <td className="strong">
                                   <span className="merged-name">
-                                    {row.tool}
-                                    {!sameName(toolLabel(row.tool), row.tool) && (
+                                    {lang === 'en' ? toolLabel(row.tool) : row.tool}
+                                    {lang !== 'en' && !sameName(toolLabel(row.tool), row.tool) && (
                                       <span className="merged-from">{t('統計為「{0}」', [toolLabel(row.tool)])}</span>
                                     )}
                                   </span>
                                 </td>
                                 <td className="num">{row.qty || '–'}</td>
-                                <td>{(lang === 'en' ? unitToEnglish(row.unit) : row.unit) || '–'}</td>
-                                <td className="muted">{row.note}</td>
+                                <td>{toolUnitLabel(row.unit) || '–'}</td>
+                                <td className="muted">{contentText(row.note)}</td>
                               </tr>
                             )
                           })}
@@ -6117,7 +6348,7 @@ function App() {
                                         </span>
                                         <span className="assign-meta">
                                           {status === 'no-amount'
-                                            ? row.groupNeeds.map((need) => need.groupName).join('、')
+                                            ? row.groupNeeds.map((need) => need.groupName).join(listSeparator)
                                             : groupNeed
                                               ? status === 'priced'
                                                 ? t('本組 {0}，分攤約 {1}', [
@@ -6127,19 +6358,19 @@ function App() {
                                                 : t('本組 {0}', [amountLabel(formatQuantity(groupNeed.qty, row.totalUnit))])
                                               : row.groupNeeds
                                                   .map((need) => `${need.groupName} ${amountLabel(formatQuantity(need.qty, row.totalUnit))}`)
-                                                  .join('、')}
+                                                  .join(listSeparator)}
                                         </span>
                                       </div>
                                       <div className="budget-source">
                                         {status === 'priced' ? (
                                           <>
-                                            <span className="suggest-store">{assigned ? t(store) : t('建議 {0}', [t(store)])}</span>
-                                            <span className="suggest-cost">{[label, lang === 'en' && isChineseName(spec) ? '' : spec].filter(Boolean).join(' · ')}</span>
+                                            <span className="suggest-store">{assigned ? storeLabel(store) : t('建議 {0}', [storeLabel(store)])}</span>
+                                            <span className="suggest-cost">{[label, contentText(spec)].filter(Boolean).join(' · ')}</span>
                                           </>
                                         ) : (
                                           <span className="budget-missing-text">
                                             {status === 'no-price' && t('還沒有價格')}
-                                            {status === 'no-store-price' && t('{0} 還沒有價格', [t(store)])}
+                                            {status === 'no-store-price' && t('{0} 還沒有價格', [storeLabel(store)])}
                                             {status === 'unit-mismatch' && t('現有價格是 {0}，和需求的單位不同，請補一筆「{1}」的價格', [label, unitLabel(row.totalUnit)])}
                                             {status === 'no-amount' && t('沒有明確數量或單位，無法估價')}
                                           </span>
@@ -6268,7 +6499,7 @@ function App() {
 
                 {duplicated.length > 0 && (
                   <div className="alert alert-error" role="alert">
-                    <span>{t('注意：{0}同時出現，可能會重複購買。請在下方「分配採買地點」為它重新選擇一間店。', [duplicated.map((entry) => t('「{0}」在 {1}', [entry.name, entry.stores.join('、')])).join('；')])}</span>
+                    <span>{t('注意：{0}同時出現，可能會重複購買。請在下方「分配採買地點」為它重新選擇一間店。', [duplicated.map((entry) => t('「{0}」在 {1}', [ingredientLabel(entry.name), entry.stores.join(listSeparator)])).join('；')])}</span>
                   </div>
                 )}
 
@@ -6361,13 +6592,13 @@ function App() {
                                       </span>
                                       <span className="assign-meta">
                                         {row.groupNeeds
-                                          .map((need) => `${need.groupName} ${formatNumber(need.qty)}${row.totalUnit}`)
-                                          .join('、')}
-                                        {row.note && ` · ${row.note}`}
+                                          .map((need) => `${need.groupName} ${amountLabel(`${formatNumber(need.qty)}${row.totalUnit}`)}`)
+                                          .join(listSeparator)}
+                                        {row.note && ` · ${noteLabel(row.note)}`}
                                       </span>
                                     </div>
                                     <div className="assign-suggest">
-                                      <span className="suggest-store">{t('建議 {0}', [t(row.suggestion.store)])}</span>
+                                      <span className="suggest-store">{t('建議 {0}', [storeLabel(row.suggestion.store)])}</span>
                                       <span className="suggest-cost">
                                         {row.suggestion.estimate
                                           ? t('約 {0}', [formatMoney(row.suggestion.estimate.cost)])
@@ -6383,10 +6614,10 @@ function App() {
                                       value={row.assignedStoreId ? String(row.assignedStoreId) : ''}
                                       options={[
                                         { value: '', label: t('尚未分配') },
-                                        ...shoppingStores.map((store) => ({ value: String(store.id), label: t(store.storeName.trim()) || t('未命名商店') })),
+                                        ...shoppingStores.map((store) => ({ value: String(store.id), label: storeLabel(store.storeName.trim()) || t('未命名商店') })),
                                         ...storeOptions
                                           .filter((name) => !shoppingStores.some((store) => store.storeName.trim() === name))
-                                          .map((name) => ({ value: `new:${name}`, label: t('＋ 新增「{0}」', [t(name)]) })),
+                                          .map((name) => ({ value: `new:${name}`, label: t('＋ 新增「{0}」', [storeLabel(name)]) })),
                                       ]}
                                       onChange={(value) => {
                                         if (value.startsWith('new:')) {
@@ -6424,7 +6655,7 @@ function App() {
                       .map((name) => (
                         <button key={name} type="button" className="btn btn-ghost btn-sm" onClick={() => addShoppingStore(name)}>
                           <Icon name="plus" size={14} />
-                          {t(name)}
+                          {storeLabel(name)}
                         </button>
                       ))}
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => addShoppingStore()}>
@@ -6444,10 +6675,11 @@ function App() {
                       <span className="store-icon" aria-hidden="true">
                         <Icon name="cart" size={16} />
                       </span>
-                      <input
+                      <TranslatedInput
                         type="text"
                         className="dish-title-input"
                         value={store.storeName}
+                        display={englishOnly(storeLabel(store.storeName))}
                         onChange={(event) => updateShoppingStoreName(store.id, event.target.value)}
                         placeholder={t('商店名稱')}
                         aria-label={t('商店名稱')}
@@ -6535,7 +6767,7 @@ function App() {
                                     onChange={(event) =>
                                       updateShoppingStoreItem(store.id, item.id, 'purchased', event.target.checked)
                                     }
-                                    aria-label={t('標記 {0} 是否已買', [item.ingredient || t('食材')])}
+                                    aria-label={t('標記 {0} 是否已買', [ingredientLabel(item.ingredient) || t('食材')])}
                                   />
                                   <span className="shop-photo">
                                     {renderReferenceThumb(item.ingredient, 'md') ?? (
@@ -6554,7 +6786,7 @@ function App() {
                                           { value: '', label: t('選擇食材') },
                                           ...uniqueSummaryIngredients.map((name) => {
                                             const isAssigned = allAssignedIngredients.has(canonicalIngredient(name).key)
-                                            return { value: name, label: `${name}${isAssigned ? t('（已排定）') : ''}`, disabled: isAssigned }
+                                            return { value: name, label: `${ingredientLabel(name)}${isAssigned ? t('（已排定）') : ''}`, disabled: isAssigned }
                                           }),
                                         ]}
                                         onChange={(value) => updateShoppingStoreItem(store.id, item.id, 'ingredient', value)}
@@ -6565,8 +6797,8 @@ function App() {
                                     )}
                                     {row && (
                                       <span className="shop-note">
-                                        {row.groupNeeds.map((need) => need.groupName).join('、')}
-                                        {row.note && ` · ${row.note}`}
+                                        {row.groupNeeds.map((need) => need.groupName).join(listSeparator)}
+                                        {row.note && ` · ${noteLabel(row.note)}`}
                                       </span>
                                     )}
                                     {estimate && <span className="shop-estimate">{estimate.label}</span>}
@@ -6659,7 +6891,7 @@ function App() {
                           )}
                           {storeStats.map(({ store, stats }) => (
                             <tr key={store.id}>
-                              <td className="strong">{t(store.storeName.trim()) || t('未命名商店')}</td>
+                              <td className="strong">{storeLabel(store.storeName.trim()) || t('未命名商店')}</td>
                               <td className="num">
                                 {stats.purchased}/{stats.total}
                               </td>
@@ -6823,9 +7055,10 @@ function App() {
                       .map((entry) => (
                         <tr key={entry.id}>
                           <td>
-                            <input
+                            <TranslatedInput
                               className="cell-input"
                               value={entry.ingredient}
+                              display={englishOnly(ingredientLabel(entry.ingredient))}
                               onChange={(event) => updatePriceEntry(entry.id, { ingredient: event.target.value })}
                               placeholder={t('食材')}
                               aria-label={t('食材')}
@@ -6869,9 +7102,10 @@ function App() {
                             />
                           </td>
                           <td>
-                            <input
+                            <TranslatedInput
                               className="cell-input cell-input-unit"
                               value={entry.packUnit}
+                              display={englishOnly(unitLabel(entry.packUnit))}
                               onChange={(event) => updatePriceEntry(entry.id, { packUnit: event.target.value })}
                               placeholder={t('顆／g／斤')}
                               aria-label={t('單位')}
@@ -6889,9 +7123,10 @@ function App() {
                             />
                           </td>
                           <td>
-                            <input
+                            <TranslatedInput
                               className="cell-input"
                               value={entry.spec}
+                              display={englishOnly(contentText(entry.spec))}
                               onChange={(event) => updatePriceEntry(entry.id, { spec: event.target.value })}
                               placeholder={t('規格、品牌')}
                               aria-label={t('規格說明')}
@@ -6951,7 +7186,7 @@ function App() {
                 <div className="market-grid">
                   {marketPrices.produce.map((item) => (
                     <div key={item.ingredient} className="market-item">
-                      <span className="market-name">{item.ingredient}</span>
+                      <span className="market-name">{ingredientLabel(item.ingredient)}</span>
                       <span className="market-price">{t('約 ${0}/斤', [item.price])}</span>
                       <span className="muted small">{t('批發 {0}/公斤', [item.wholesalePerKg])}</span>
                     </div>
@@ -6967,7 +7202,6 @@ function App() {
             <header className="card-head">
               <h2 className="card-title">{t('版本日誌')}</h2>
             </header>
-            {lang === 'en' && <p className="page-note changelog-note">Release notes are written in Chinese.</p>}
             <ol className="changelog-list">
               {CHANGELOG_ENTRIES.map((entry) => (
                 <li key={entry.version} className="changelog-item">
@@ -6976,7 +7210,7 @@ function App() {
                     <span className="muted small">{entry.date}</span>
                   </div>
                   <ul>
-                    {entry.changes.map((change) => (
+                    {(lang === 'en' ? (CHANGELOG_EN[entry.version] ?? entry.changes) : entry.changes).map((change) => (
                       <li key={change}>{change}</li>
                     ))}
                   </ul>
@@ -7067,7 +7301,7 @@ function App() {
                   <Icon name="close" size={20} />
                 </button>
                 <div className="shop-mode-title">
-                  <strong>{store.storeName.trim() || t('採買清單')}</strong>
+                  <strong>{storeLabel(store.storeName.trim()) || t('採買清單')}</strong>
                   <span>{t('已買 {0} / {1}', [stats.purchased, stats.total])}</span>
                 </div>
                 <label className="shop-mode-toggle">
@@ -7116,7 +7350,7 @@ function App() {
                               </span>
                               {Boolean(row?.note || row?.groupNeeds.length) && (
                                 <span className="shop-mode-note">
-                                  {[row?.note, row?.groupNeeds.map((need) => need.groupName).join('、')].filter(Boolean).join(' · ')}
+                                  {[row?.note && noteLabel(row.note), row?.groupNeeds.map((need) => need.groupName).join(listSeparator)].filter(Boolean).join(' · ')}
                                 </span>
                               )}
                             </button>

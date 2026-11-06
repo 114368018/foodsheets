@@ -11,6 +11,8 @@ import {
   isEnglishName,
   learnedKey,
   amountToEnglish,
+  toolUnitToEnglish,
+  unitToEnglish,
   BUILTIN_TOOL_ZH_EN,
   toolEnglishToChinese,
   toolChineseToEnglish,
@@ -63,6 +65,14 @@ test('one-word spellings and names typed in English', () => {
 
 test('amounts in English', () => {
   assert.equal(amountToEnglish('3顆'), '3 pcs')
+  assert.equal(amountToEnglish('1小撮'), '1 pinch')
+  assert.equal(amountToEnglish('2 小撮'), '2 pinches')
+  assert.equal(amountToEnglish('4根(大)'), '4 pcs (large)')
+  assert.equal(amountToEnglish('2罐(400g)'), '2 cans (400g)')
+  assert.equal(amountToEnglish('31 g + 1 小撮'), '31 g + 1 pinch')
+  assert.equal(amountToEnglish('0.1酌量'), 'to taste')
+  assert.equal(amountToEnglish('約 2.5 顆'), 'about 2.5 pcs')
+  assert.equal(amountToEnglish('100g室溫'), '100g, room temperature')
   assert.equal(amountToEnglish('1.5 公斤 + 300 克'), '1.5 kg + 300 g')
   assert.equal(amountToEnglish('2 大匙'), '2 tbsp')
   assert.equal(amountToEnglish('適量'), 'as needed')
@@ -97,4 +107,21 @@ test('names put together from known parts', () => {
   assert.equal(chineseToEnglish('完全不認識', {}), null)
   // learned (admin-corrected) parts are used too
   assert.equal(toolChineseToEnglish('小怪鍋', { 'zh:怪鍋': 'Odd pot' }), 'Small odd pot')
+})
+
+test('units on their own', () => {
+  assert.equal(unitToEnglish('小撮'), 'pinches')
+  assert.equal(unitToEnglish('g 室溫'), 'g, room temperature')
+  assert.equal(unitToEnglish('g室溫'), 'g, room temperature')
+  assert.equal(unitToEnglish('根(大)'), 'pcs (large)')
+  assert.equal(unitToEnglish('罐(379ml)'), 'cans (379ml)')
+  assert.equal(unitToEnglish('酌量'), 'to taste')
+  assert.equal(toolUnitToEnglish('把'), 'pcs')
+  assert.equal(unitToEnglish('把'), 'bunches')
+})
+
+test('machine mistakes give way to better translations, but admin corrections stay', () => {
+  assert.equal(chineseToEnglish('羅勒葉', { 'zh:羅勒葉': 'Basil yeh' }), 'Basil leaves')
+  assert.equal(chineseToEnglish('筆管麵', { 'zh:筆管麵': 'Pen-tube noodles' }), 'Penne')
+  assert.equal(chineseToEnglish('羅勒葉', { 'zh:羅勒葉': 'Sweet basil' }), 'Sweet basil')
 })
