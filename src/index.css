@@ -2005,6 +2005,42 @@ button.ref-thumb:hover {
   font-weight: 700;
 }
 
+/* Empty stores take one line, so the ones in use are easy to find. */
+.store-card.is-empty .store-summary,
+.store-card.is-empty .shop-list,
+.store-card.is-empty .store-head-actions .btn {
+  display: none;
+}
+
+.store-card.is-empty .card-head {
+  border-bottom-color: transparent;
+}
+
+.store-card.is-empty .btn-add-row {
+  margin-top: 0;
+}
+
+.sample-note {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.cell-hint {
+  display: block;
+  padding: 0 8px 4px;
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.budget-field-total {
+  width: min(100%, 300px);
+}
+
 /* ---------- Budget page ---------- */
 .kpi-grid.kpi-grid-3 {
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -2944,6 +2980,11 @@ button.ref-thumb:hover {
 
   .lock-form .sidebar-input {
     width: 112px;
+  }
+
+  /* Members never need the admin password: keep only the lock until it is tapped. */
+  .lock-form:not(.is-open) .sidebar-input {
+    display: none;
   }
 
   .nav-section {

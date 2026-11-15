@@ -78,7 +78,40 @@ export const splitAmountInput = (text: string): { qty: string; unit: string } =>
   return match ? { qty: match[1], unit: match[2] } : { qty: '', unit: text }
 }
 
-const VAGUE_AMOUNT = /^(適量|少許|少量|些許|一點|一些)$/
+const VAGUE_WORDS = '適量|少許|少量|些許|一點|一些|酌量|隨意'
+const VAGUE_AMOUNT = new RegExp(`^(${VAGUE_WORDS})$`)
+
+// What a row's amount is: a number ("6 顆"), words such as "適量", or nothing yet.
+export type RowAmount = { kind: 'number' | 'vague' | 'none'; text: string }
+export const rowAmount = (qty: string, unit: string): RowAmount => {
+  const number = qty.trim()
+  if (/^\d/.test(number)) {
+    return { kind: 'number', text: `${number}${unit.trim()}` }
+  }
+  const words = number || unit.trim()
+  return words ? { kind: 'vague', text: words } : { kind: 'none', text: '' }
+}
+
+// The number and unit to add up. "7-8朵" (stored as 7 and "-8朵") counts as 8 朵, so enough gets bought.
+export const countedAmount = (qty: string, unit: string): { qty: string; unit: string } => {
+  const range = unit.match(/^\s*[-~～–—至到]\s*(\d+(?:\.\d+)?)\s*(.*)$/)
+  if (!range || !/^\d/.test(qty.trim())) {
+    return { qty, unit }
+  }
+  return { qty: String(Math.max(Number(qty) || 0, Number(range[1]))), unit: range[2] }
+}
+
+// Something to point out about a typed amount, or '' when it looks fine.
+export const amountConcern = (qty: string, unit: string): 'no-unit' | 'milligram' | '' => {
+  if (rowAmount(qty, unit).kind !== 'number') {
+    return ''
+  }
+  const text = countedAmount(qty, unit).unit.trim().toLowerCase()
+  if (!text) {
+    return 'no-unit'
+  }
+  return /^(毫克|mg)/.test(text) ? 'milligram' : ''
+}
 
 export const parseIngredientLine = (line: string): ParsedIngredient | null => {
   const notes: string[] = []
@@ -111,10 +144,10 @@ export const parseIngredientLine = (line: string): ParsedIngredient | null => {
     }
   }
 
-  const vague = text.match(/^(.+?)\s*(適量|少許|少量|些許|一點|一些)$/)
+  // "鹽 少許": the words are the amount.
+  const vague = text.match(new RegExp(`^(.+?)\\s*(${VAGUE_WORDS})$`))
   if (vague && !VAGUE_AMOUNT.test(text)) {
-    notes.unshift(vague[2])
-    text = vague[1]
+    return { ingredient: vague[1].trim(), totalQty: '', totalUnit: vague[2], note: notes.join('、') }
   }
 
   return { ingredient: text.trim(), totalQty: '', totalUnit: '', note: notes.join('、') }

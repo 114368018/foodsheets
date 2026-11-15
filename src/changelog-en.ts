@@ -1,5 +1,15 @@
 // English release notes, in the same order as CHANGELOG_ENTRIES (a test keeps the two in step).
 export const CHANGELOG_EN: Record<string, string[]> = {
+  'v2.11.0': [
+    'Simpler estimates: to add a price, enter one number, "about how much in total for this item". No store or unit needed; people who know the unit price can still enter price and pack. When groups change amounts later, the estimate scales with them.',
+    'More ingredients are estimated automatically: weight and volume are compared as 1 g ≈ 1 ml (25 g of soy sauce against a 1000 ml bottle price, for example), marked as approximate.',
+    'Fixed an overestimate: an ingredient needed in both g and ml (such as olive oil) is no longer counted as two bottles. The budget page and the shopping list now always show the same estimated total.',
+    '"As needed" and "a little" now count as an amount: they are no longer flagged as missing, they reach the summary and shopping list, and the shopping list no longer labels them "already enough at home".',
+    'Hints while filling in: an amount without a unit, or a unit of milligrams (usually meant as grams), gets a note under the field. A range such as "7-8" counts as 8.',
+    'Trailing dots and similar marks no longer split one ingredient into two entries.',
+    'Shopping list: stores without ingredients collapse to one line; moving an item with a recorded amount back to unassigned asks first; an ingredient in several units lists every group that needs it.',
+    'Getting started: the sample page now says to pick your own group from the Groups menu, and on phones the admin password box is tucked behind the lock button so the title no longer wraps.',
+  ],
   'v2.10.0': [
     'More complete English: dish names, cooking steps, notes, cuisine, price notes and units (pinch, room temperature, cans of 400 g…) all read in English, in exported Word files too. People\'s names are not translated.',
     'In English mode, fields show English until you click into them; then the original appears for editing, so what people typed never changes.',

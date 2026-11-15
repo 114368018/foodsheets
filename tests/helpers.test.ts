@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { threeWayMerge, deepEqual } from '../src/sync.ts'
-import { parseIngredientText, parseIngredientLine, parseAmount, splitAmountInput } from '../src/ingredient-parse.ts'
+import { amountConcern, countedAmount, parseIngredientText, parseIngredientLine, parseAmount, rowAmount, splitAmountInput } from '../src/ingredient-parse.ts'
 import {
   BUILTIN_INGREDIENT_ALIASES,
   canonicalName,
@@ -51,6 +51,9 @@ test('names and units merge for summaries', () => {
   assert.deepEqual(canonicalUnit('公斤'), { unit: 'g', factor: 1000, dimension: 'weight' })
   assert.deepEqual(canonicalUnit('CC'), { unit: 'ml', factor: 1, dimension: 'volume' })
   assert.deepEqual(canonicalUnit('pcs'), canonicalUnit('顆'))
+  assert.equal(canonicalName('鹽……', {}, {}).key, canonicalName('鹽', {}, {}).key)
+  assert.equal(canonicalName('＊細砂糖…', {}, {}).display, '細砂糖')
+  assert.equal(canonicalName('7-11 鮮乳', {}, {}).display, '7-11鮮乳')
   assert.deepEqual(canonicalUnit('Tablespoons'), canonicalUnit('大匙'))
   assert.equal(formatQuantity(1500, 'g'), '1.5 kg')
   assert.deepEqual(suggestDuplicateNames(['鴻喜菇', '鴻禧菇', '紅豆', '紅椒', '白醋', '黑醋'], new Set()), [['鴻喜菇', '鴻禧菇']])
@@ -60,4 +63,27 @@ test('ids stay unique within the same millisecond', () => {
   const ids = Array.from({ length: 5000 }, () => nextId())
   assert.equal(new Set(ids).size, ids.length)
   assert.ok(ids.every((id) => Number.isSafeInteger(id)))
+})
+
+test('words such as 適量 count as an amount', () => {
+  assert.deepEqual(parseIngredientLine('鹽 少許'), { ingredient: '鹽', totalQty: '', totalUnit: '少許', note: '' })
+  assert.equal(rowAmount('', '適量').kind, 'vague')
+  assert.equal(rowAmount('6', '顆').kind, 'number')
+  assert.equal(rowAmount('', '').kind, 'none')
+  assert.equal(rowAmount(' ', ' ').kind, 'none')
+})
+
+test('amounts worth a second look', () => {
+  assert.equal(amountConcern('3', ''), 'no-unit')
+  assert.equal(amountConcern('450', '毫克'), 'milligram')
+  assert.equal(amountConcern('450', 'g'), '')
+  assert.equal(amountConcern('', '適量'), '')
+  assert.equal(amountConcern('', ''), '')
+})
+
+test('a range counts as its upper end', () => {
+  assert.deepEqual(countedAmount('7', '-8朵'), { qty: '8', unit: '朵' })
+  assert.deepEqual(countedAmount('2', '~3 顆'), { qty: '3', unit: '顆' })
+  assert.deepEqual(countedAmount('6', '顆'), { qty: '6', unit: '顆' })
+  assert.deepEqual(countedAmount('', '適量'), { qty: '', unit: '適量' })
 })

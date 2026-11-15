@@ -85,6 +85,8 @@ export const BUILTIN_TOOL_ALIASES: Record<string, string> = {
 // Readable form: half-width, variant characters unified, no stray spaces, case kept.
 export const cleanDisplayName = (name: string): string =>
   name
+    // "鹽……" and "＊鹽" are 鹽: decoration at either end is not part of the name.
+    .replace(/^[\s…‥.。、,，:：;；*＊·•・~～-]+|[\s…‥.。、,，:：;；*＊·•・~～]+$/g, '')
     .replace(/[！-～]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
     .replace(/\s+/g, '')
     .replace(/./g, (char) => CHAR_VARIANTS[char] ?? char)

@@ -148,7 +148,7 @@ export const storeKindOf = (storeName: string): StoreKind | null => {
 
 // ---------- Units ----------
 const WEIGHT_UNITS: Record<string, number> = { g: 1, 克: 1, 公克: 1, kg: 1000, 公斤: 1000, 斤: 600, 台斤: 600, jin: 600, 兩: 37.5 }
-const VOLUME_UNITS: Record<string, number> = { ml: 1, cc: 1, 毫升: 1, l: 1000, 公升: 1000 }
+const VOLUME_UNITS: Record<string, number> = { ml: 1, cc: 1, 毫升: 1, l: 1000, 公升: 1000, 升: 1000, 大匙: 15, 湯匙: 15, 小匙: 5, 茶匙: 5 }
 const COUNT_ALIASES: Record<string, string> = {
   個: '顆',
   粒: '顆',
@@ -195,16 +195,18 @@ export const toMeasure = (qty: number, rawUnit: string): Measure | null => {
   if (VOLUME_UNITS[unit]) {
     return { dimension: 'volume', value: qty * VOLUME_UNITS[unit] }
   }
-  if (!unit) {
-    return null
-  }
+  // No unit at all ("雞蛋 3") is a plain count, which only another unit-less amount matches.
   return { dimension: `count:${COUNT_ALIASES[unit] ?? unit}`, value: qty }
 }
 
 export type Estimate = {
   cost: number
   packs: number
+  // How many packs the amount is before rounding up.
+  ratio: number
   entry: PriceEntry
+  // Weight was compared with volume as 1 g ≈ 1 ml (close enough for water, milk, sauces and oil).
+  approx?: boolean
 }
 
 // Expected cost of buying `needQty needUnit` using this price entry, or null when units don't line up.
@@ -212,13 +214,17 @@ export const estimateWithEntry = (needQty: number, needUnit: string, entry: Pric
   const price = Number(entry.price)
   const need = toMeasure(needQty, needUnit)
   const pack = toMeasure(Number(entry.packQty) || 1, entry.packUnit)
-  if (!need || !pack || !Number.isFinite(price) || price <= 0 || need.dimension !== pack.dimension) {
+  if (!need || !pack || !Number.isFinite(price) || price <= 0 || pack.value <= 0) {
+    return null
+  }
+  const approx = need.dimension !== pack.dimension
+  if (approx && !(['weight', 'volume'].includes(need.dimension) && ['weight', 'volume'].includes(pack.dimension))) {
     return null
   }
 
   const ratio = need.value / pack.value
   const packs = entry.loose ? ratio : Math.max(1, Math.ceil(ratio - 1e-9))
-  return { cost: Math.round(packs * price), packs, entry }
+  return { cost: Math.round(packs * price), packs, ratio, entry, ...(approx ? { approx: true } : {}) }
 }
 
 export const findPriceEntries = (ingredient: string, priceBook: PriceEntry[]): PriceEntry[] => {
@@ -239,6 +245,20 @@ export const findPriceEntries = (ingredient: string, priceBook: PriceEntry[]): P
   })
 }
 
+// The same ingredient asked for in two units (180 g and 205 ml of oil) comes out of the same pack:
+// this amount only costs the packs it adds on top of what the earlier amounts already need.
+export const sharePack = (own: Estimate, earlierRatio: number): Estimate => {
+  if (own.entry.loose || earlierRatio <= 0) {
+    return own
+  }
+  const packsFor = (ratio: number) => Math.max(1, Math.ceil(ratio - 1e-9))
+  const packs = packsFor(earlierRatio + own.ratio) - packsFor(earlierRatio)
+  return { ...own, packs, cost: Math.round(packs * Number(own.entry.price)) }
+}
+
+// A price in the same kind of unit beats a cheaper one that needed the 1 g ≈ 1 ml guess.
+export const byExactThenCost = (a: Estimate, b: Estimate): number => Number(Boolean(a.approx)) - Number(Boolean(b.approx)) || a.cost - b.cost
+
 export type Suggestion = {
   store: string
   estimate: Estimate | null
@@ -256,7 +276,7 @@ export const suggestPurchase = (
   const estimates = references
     .map((entry) => estimateWithEntry(needQty, needUnit, entry))
     .filter((estimate): estimate is Estimate => Boolean(estimate))
-    .sort((a, b) => a.cost - b.cost)
+    .sort(byExactThenCost)
 
   if (estimates.length > 0) {
     return { store: estimates[0].entry.store, estimate: estimates[0], references, reason: 'price' }

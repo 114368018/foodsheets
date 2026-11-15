@@ -27,6 +27,9 @@ import {
   looksLikeIngredientList,
   parseAmount,
   parseIngredientText,
+  amountConcern,
+  countedAmount,
+  rowAmount,
   splitAmountInput,
   type ParsedIngredient,
 } from './ingredient-parse'
@@ -71,6 +74,8 @@ import {
   dedupeStoreItems,
   categorizeIngredient,
   estimateWithEntry,
+  byExactThenCost,
+  sharePack,
   splitEstimateByGroup,
   findPriceEntries,
   formatMoney,
@@ -221,6 +226,8 @@ type BudgetRow = {
 }
 type BudgetForm = {
   key: string
+  // 'total': one number for the whole amount needed. 'unit': price of one pack, for people who know it.
+  mode: 'total' | 'unit'
   store: string
   price: string
   packQty: string
@@ -1812,22 +1819,24 @@ function App() {
 
     allIngredientRows.forEach((row) => {
       const original = row.ingredient.trim()
-      if (!original || !row.totalQty.trim()) {
+      const amount = rowAmount(row.totalQty, row.totalUnit)
+      if (!original || amount.kind === 'none') {
         return
       }
 
       const name = resolveIngredientName(original, ingredientAliases, nameTranslations)
       // "適量" and other non-numbers: remembered per ingredient and shown on its main row.
-      if (!/^\s*\d/.test(row.totalQty)) {
+      if (amount.kind === 'vague') {
         const vague = vagueByName.get(name.key) ?? { display: name.display, amounts: [] }
-        if (!vague.amounts.includes(row.totalQty.trim())) {
-          vague.amounts.push(row.totalQty.trim())
+        if (!vague.amounts.includes(amount.text)) {
+          vague.amounts.push(amount.text)
         }
         vagueByName.set(name.key, vague)
         return
       }
 
-      const total = canonicalUnit(row.totalUnit)
+      const counted = countedAmount(row.totalQty, row.totalUnit)
+      const total = canonicalUnit(counted.unit)
       const key = `${name.key}|${total.unit}`
       let target = map.get(key)
       if (!target) {
@@ -1848,7 +1857,7 @@ function App() {
         map.set(key, target)
       }
 
-      target.sumTotalQty += toNumber(row.totalQty) * total.factor
+      target.sumTotalQty += toNumber(counted.qty) * total.factor
 
       if (original !== name.display && !target.variants.includes(original)) {
         target.variants.push(original)
@@ -1959,7 +1968,7 @@ function App() {
     () =>
       new Set(
         activeIngredientRows
-          .filter((row) => row.ingredient.trim() && !row.totalQty.trim())
+          .filter((row) => row.ingredient.trim() && rowAmount(row.totalQty, row.totalUnit).kind === 'none')
           .map((row) => row.id),
       ),
     [activeIngredientRows],
@@ -2035,7 +2044,7 @@ function App() {
             Number(!group.teamName.trim()) +
             Number(!group.cuisineType.trim()) +
             group.dishes.filter((dish) => !dish.title.trim()).length +
-            group.ingredientRows.filter((row) => row.ingredient.trim() && !row.totalQty.trim()).length +
+            group.ingredientRows.filter((row) => row.ingredient.trim() && rowAmount(row.totalQty, row.totalUnit).kind === 'none').length +
             group.toolRows.filter((row) => row.tool.trim() && !row.qty.trim()).length
 
           return [
@@ -2157,15 +2166,18 @@ function App() {
       const group = groupData[groupId]
       group.ingredientRows.forEach((row) => {
         const name = row.ingredient.trim()
-        if (!name || !row.totalQty.trim()) {
+        const amount = rowAmount(row.totalQty, row.totalUnit)
+        if (!name || amount.kind === 'none') {
           return
         }
 
-        const unit = canonicalUnit(row.totalUnit)
+        // "適量" has no number: the group still needs it, with a quantity of 0.
+        const counted = countedAmount(row.totalQty, row.totalUnit)
+        const unit = amount.kind === 'number' ? canonicalUnit(counted.unit) : { unit: '', factor: 0 }
         const key = `${resolveIngredientName(name, ingredientAliases, nameTranslations).key}|${unit.unit}`
         const byGroup = needsByKey.get(key) ?? new Map<GroupTab, GroupNeed>()
         const need = byGroup.get(groupId) ?? { groupId, groupName: contentText(t(group.name)), qty: 0, dishTitles: [] }
-        need.qty += toNumber(row.totalQty) * unit.factor
+        need.qty += toNumber(counted.qty) * unit.factor
         const dishTitle = group.dishes.find((dish) => dish.id === row.dishId)?.title.trim()
         if (dishTitle && !need.dishTitles.includes(contentText(dishTitle))) {
           need.dishTitles.push(contentText(dishTitle))
@@ -2216,11 +2228,21 @@ function App() {
   const findOverviewRows = (name: string) => overviewByIngredient.get(canonicalIngredient(name).key) ?? []
   const findOverview = (name: string): ShoppingIngredientOverviewRow | undefined => findOverviewRows(name)[0]
 
+  // Every group that asked for the ingredient, whichever unit they used.
+  const groupNamesFor = (name: string) =>
+    Array.from(new Set(findOverviewRows(name).flatMap((row) => row.groupNeeds.map((need) => need.groupName)))).join(listSeparator)
+
   // What is still to buy for a store item, e.g. "4 顆", or "6 顆 + 300 g" when units differ.
   const describeNeed = (name: string, ownedQty: string) => {
     const rows = findOverviewRows(name)
     if (rows.length === 0) {
       return null
+    }
+
+    // Only "適量": there is no number to subtract from.
+    if (rows.length === 1 && rows[0].requiredTotal <= 0) {
+      const words = amountLabel(rows[0].note.split(' / ').pop() ?? '') || '–'
+      return { need: words, remaining: words, mixed: true }
     }
 
     if (rows.length === 1) {
@@ -2253,26 +2275,52 @@ function App() {
     )
   })
 
-  const estimateLabel = (estimate: Estimate) =>
-    t('參考 ${0}/{1}{2}', [
+  const estimateLabel = (estimate: Estimate): string =>
+    // Nothing extra to buy: the ingredient's other amount already pays for this pack.
+    !estimate.entry.loose && estimate.packs === 0
+      ? t('和這項食材的另一筆合買，不另計')
+      : t('參考 ${0}/{1}{2}', [
       estimate.entry.price,
       formatPack({ ...estimate.entry, packUnit: unitLabel(estimate.entry.packUnit) }),
       estimate.entry.loose ? '' : ` × ${estimate.packs}`,
-    ])
+    ]) + (estimate.approx ? t('（以 1 g ≈ 1 ml 概算）') : '')
+
+  // How much of the same pack the ingredient's earlier rows (its other units) already use.
+  const earlierPackRatio = (
+    row: ShoppingIngredientOverviewRow,
+    own: Estimate,
+    pick: (sibling: ShoppingIngredientOverviewRow) => Estimate | null | undefined,
+  ) => {
+    const siblings = findOverviewRows(row.ingredient)
+    return siblings.slice(0, Math.max(siblings.indexOf(row), 0)).reduce((sum, sibling) => {
+      const estimate = sibling.requiredTotal > 0 ? pick(sibling) : null
+      return estimate && estimate.entry.id === own.entry.id ? sum + estimate.ratio : sum
+    }, 0)
+  }
 
   const estimateRowAtStore = (row: ShoppingIngredientOverviewRow, ownedQty: number, storeName: string) => {
+    // "適量" has no quantity to price.
+    if (row.requiredTotal <= 0) {
+      return null
+    }
     const needQty = Math.max(row.requiredTotal - ownedQty, 0)
     if (needQty === 0) {
-      return { cost: 0, label: t('家裡已有足夠數量'), spec: '', entryId: null }
+      return { cost: 0, label: t('家裡已有足夠數量'), spec: '', entryId: null, shared: false }
     }
 
     const kind = storeKindOf(storeName)
-    const best = findPriceEntries(row.ingredient, effectivePriceBook)
-      .filter((entry) => entry.store === storeName.trim() || (kind !== null && storeKindOf(entry.store) === kind))
-      .map((entry) => estimateWithEntry(needQty, row.totalUnit, entry))
-      .filter((estimate) => estimate !== null)
-      .sort((a, b) => a.cost - b.cost)[0]
-    return best ? { cost: best.cost, label: estimateLabel(best), spec: best.entry.spec, entryId: best.entry.id } : null
+    const bestFor = (qty: number, unit: string) =>
+      findPriceEntries(row.ingredient, effectivePriceBook)
+        .filter((entry) => entry.store === storeName.trim() || (kind !== null && storeKindOf(entry.store) === kind))
+        .map((entry) => estimateWithEntry(qty, unit, entry))
+        .filter((estimate) => estimate !== null)
+        .sort(byExactThenCost)[0]
+    const own = bestFor(needQty, row.totalUnit)
+    if (!own) {
+      return null
+    }
+    const best = sharePack(own, earlierPackRatio(row, own, (sibling) => bestFor(sibling.requiredTotal, sibling.totalUnit)))
+    return { cost: best.cost, label: estimateLabel(best), spec: best.entry.spec, entryId: best.entry.id, shared: !best.entry.loose && best.packs === 0 }
   }
 
   // Cheapest estimate for an item at this particular store, after subtracting what is already at home.
@@ -2291,7 +2339,8 @@ function App() {
       return null
     }
 
-    return { cost: known.reduce((sum, part) => sum + part.cost, 0), label: known.map((part) => part.label).join(' ＋ ') }
+    const labels = known.filter((part) => !part.shared).map((part) => part.label)
+    return { cost: known.reduce((sum, part) => sum + part.cost, 0), label: Array.from(new Set(labels)).join(' ＋ ') }
   }
 
   const getStoreStats = (store: ShoppingStore) =>
@@ -2304,9 +2353,9 @@ function App() {
     findOverviewRows(item.ingredient).forEach((row) => {
       const rowTotal = row.groupNeeds.reduce((sum, need) => sum + need.qty, 0)
       row.groupNeeds.forEach((need) => {
-        if (rowTotal > 0) {
-          shares.set(need.groupId, (shares.get(need.groupId) ?? 0) + need.qty / rowTotal)
-        }
+        // Without quantities ("適量"), the groups that asked for it share it equally.
+        const share = rowTotal > 0 ? need.qty / rowTotal : 1 / row.groupNeeds.length
+        shares.set(need.groupId, (shares.get(need.groupId) ?? 0) + share)
       })
     })
     return Array.from(shares.entries()).map(([groupId, qty]) => ({ groupId, qty }))
@@ -2330,7 +2379,7 @@ function App() {
     const store = assignedStore?.storeName.trim() || row.suggestion.store
     const base = { key, row, store, assigned: Boolean(assignedStore), cost: 0, label: '', spec: '', entryId: null }
 
-    if (row.requiredTotal <= 0 || !row.totalUnit.trim()) {
+    if (row.requiredTotal <= 0) {
       return { ...base, status: 'no-amount' }
     }
 
@@ -2351,7 +2400,10 @@ function App() {
         : { ...base, status: 'no-store-price' }
     }
 
-    const { estimate, references } = row.suggestion
+    const { references } = row.suggestion
+    const estimate = row.suggestion.estimate
+      ? sharePack(row.suggestion.estimate, earlierPackRatio(row, row.suggestion.estimate, (sibling) => (sibling.assignedStoreId ? null : sibling.suggestion.estimate)))
+      : null
     if (estimate) {
       return { ...base, status: 'priced', cost: estimate.cost, label: estimateLabel(estimate), spec: estimate.entry.spec, entryId: estimate.entry.id }
     }
@@ -2364,6 +2416,7 @@ function App() {
   // A new price starts from the amount this ingredient needs.
   const budgetFormFor = ({ key, row }: BudgetRow, store: string): BudgetForm => ({
     key,
+    mode: 'total',
     store,
     price: '',
     packQty: canonicalUnit(row.totalUnit).dimension === 'count' ? '1' : formatNumber(row.requiredTotal),
@@ -2372,18 +2425,21 @@ function App() {
   })
 
   // It is a hand-entered price, so the daily update leaves it alone.
+  // A total is saved as "this much money for this much of it", so the estimate follows along when
+  // groups later change how much they need.
   const addBudgetPrice = ({ row }: BudgetRow, form: BudgetForm) => {
+    const isTotal = form.mode === 'total'
     setPriceBook((previous) => [
       {
         id: nextId(),
         ingredient: row.ingredient,
         store: form.store,
-        spec: '',
+        spec: isTotal ? '估計總額' : '',
         price: form.price.trim(),
-        packQty: form.packQty.trim() || '1',
-        packUnit: form.packUnit.trim(),
+        packQty: isTotal ? formatNumber(row.requiredTotal) : form.packQty.trim() || '1',
+        packUnit: isTotal ? row.totalUnit : form.packUnit.trim(),
         updatedAt: new Date().toISOString(),
-        ...(form.loose ? { loose: true } : {}),
+        ...(isTotal || form.loose ? { loose: true } : {}),
       },
       ...previous,
     ])
@@ -2635,6 +2691,50 @@ function App() {
   const renderBudgetForm = (budgetRow: BudgetRow, form: BudgetForm) => {
     const { row } = budgetRow
     const update = (fields: Partial<BudgetForm>) => setBudgetForm({ ...form, ...fields })
+
+    if (form.mode === 'total') {
+      const isValid = Number(form.price) > 0
+      return (
+        <form
+          className="budget-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (isValid) {
+              addBudgetPrice(budgetRow, form)
+            }
+          }}
+        >
+          <label className="budget-field budget-field-total">
+            <span>{t('{0} 總共大約多少錢？', [amountLabel(row.requiredDisplay)])}</span>
+            <input
+              className="input input-sm"
+              type="number"
+              min="0"
+              inputMode="numeric"
+              value={form.price}
+              onChange={(event) => update({ price: event.target.value })}
+              placeholder="$"
+              autoFocus
+            />
+          </label>
+          <div className="budget-form-actions">
+            <button type="submit" className="btn btn-sm" disabled={!isValid}>
+              {t('儲存')}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setBudgetForm(null)}>
+              {t('取消')}
+            </button>
+          </div>
+          <p className="field-hint budget-preview">
+            {t('只要填一個數字。不用選商店和單位，會記在「{0}」。', [storeLabel(form.store)])}{' '}
+            <button type="button" className="link-button" onClick={() => update({ mode: 'unit' })}>
+              {t('知道一包多少錢？改填單價')}
+            </button>
+          </p>
+        </form>
+      )
+    }
+
     const preview = Number(form.price) > 0
       ? estimateWithEntry(row.requiredTotal, row.totalUnit, {
           id: 0,
@@ -2711,7 +2811,10 @@ function App() {
             ? t('需求 {0}，這項預估 {1}', [amountLabel(row.requiredDisplay), formatMoney(preview.cost)])
             : Number(form.price) > 0
               ? t('單位和需求（{0}）對不上，無法換算：請用同一類單位（重量、容量或個數）。', [unitLabel(row.totalUnit)])
-              : t('輸入這個包裝的售價，例如 10 顆一盒賣 $54。')}
+              : t('輸入這個包裝的售價，例如 10 顆一盒賣 $54。')}{' '}
+          <button type="button" className="link-button" onClick={() => update({ mode: 'total' })}>
+            {t('改填總額就好')}
+          </button>
         </p>
       </form>
     )
@@ -3162,7 +3265,7 @@ function App() {
 
     addParsedIngredients(groupName, dishId, items)
     setQuickAddDrafts((previous) => ({ ...previous, [dishId]: '' }))
-    const withoutAmount = items.filter((item) => !item.totalQty).length
+    const withoutAmount = items.filter((item) => rowAmount(item.totalQty, item.totalUnit).kind === 'none').length
     setQuickAddNotices((previous) => ({
       ...previous,
       [dishId]: withoutAmount
@@ -3264,6 +3367,7 @@ function App() {
     void uploadIngredientImage(groupName, rowId, files)
   }
 
+  const [adminFormOpen, setAdminFormOpen] = useState(false)
   const unlockAdminAccess = () => {
     if (adminPasscode !== ADMIN_PASSCODE) {
       setAdminError(t('管理員密碼錯誤。'))
@@ -3863,8 +3967,8 @@ function App() {
   }
 
   const removeShoppingStore = (storeId: number) => {
-    const confirmed = window.confirm(t('確定要刪除此商店嗎？商店內的食材會回到「待分配」。'))
-    if (!confirmed) {
+    const hasItems = shoppingStores.some((store) => store.id === storeId && store.items.length > 0)
+    if (hasItems && !window.confirm(t('確定要刪除此商店嗎？商店內的食材會回到「待分配」。'))) {
       return
     }
 
@@ -3907,6 +4011,13 @@ function App() {
         return store.id === storeId ? { ...store, items: [...items, item] } : { ...store, items }
       })
     })
+  }
+
+  // Back to unassigned drops what was recorded for the item, so ask first when there is something to lose.
+  const confirmUnassign = (ingredient: string) => {
+    const target = canonicalIngredient(ingredient).key
+    const item = shoppingStores.flatMap((store) => store.items).find((entry) => canonicalIngredient(entry.ingredient).key === target)
+    return !item || !(item.purchased || item.price.trim()) || window.confirm(t('這項已有購買紀錄，確定要移除嗎？'))
   }
 
   const assignIngredientToNewStore = (ingredient: string, storeName: string) => {
@@ -4919,9 +5030,15 @@ function App() {
               </button>
             ) : (
               <form
-                className="lock-form"
+                className={`lock-form ${adminFormOpen ? 'is-open' : ''}`}
                 onSubmit={(event) => {
                   event.preventDefault()
+                  // On phones the password box stays out of the way until the lock is tapped.
+                  if (!adminPasscode) {
+                    setAdminFormOpen((previous) => !previous)
+                    setAdminError('')
+                    return
+                  }
                   unlockAdminAccess()
                 }}
               >
@@ -4968,6 +5085,11 @@ function App() {
         {isGroupTab(currentTab) && (
           // Keyed by group so switching groups remounts the page and no card can carry over.
           <Fragment key={activeGroup}>
+            {isActiveGroupSample && !adminUnlocked && (
+              <p className="page-note sample-note">
+                {t('這一頁是填寫範例，只能看。請從「{0}」選單點自己的組別開始填，填的內容會自動儲存。', [t('組別')])}
+              </p>
+            )}
             <section className="group-header">
               <div className="group-title-row">
                 <h2 className="group-title">{getGroupName(activeGroup)}</h2>
@@ -5258,10 +5380,16 @@ function App() {
                                           onBlur={(event) =>
                                             updateIngredientAmount(activeGroup, row.id, 'total', event.target.value, true)
                                           }
-                                          placeholder={isInvalid ? t('必填，如 6顆') : isBlankRow ? t('6顆') : ''}
+                                          placeholder={isInvalid ? t('必填，如 6顆、適量') : isBlankRow ? t('6顆') : ''}
                                           aria-label={t('總量（數字加單位，例如 6顆）')}
                                           aria-invalid={isInvalid}
                                         />
+                                        {amountConcern(row.totalQty, row.totalUnit) === 'no-unit' && (
+                                          <span className="cell-hint">{t('沒填單位（例如 g、顆）')}</span>
+                                        )}
+                                        {amountConcern(row.totalQty, row.totalUnit) === 'milligram' && (
+                                          <span className="cell-hint">{t('毫克是千分之一克，是不是要填「克」？')}</span>
+                                        )}
                                       </td>
                                       <td className="cell-amount" data-label={t('一份量')}>
                                         <TranslatedInput
@@ -6371,8 +6499,8 @@ function App() {
                                           <span className="budget-missing-text">
                                             {status === 'no-price' && t('還沒有價格')}
                                             {status === 'no-store-price' && t('{0} 還沒有價格', [storeLabel(store)])}
-                                            {status === 'unit-mismatch' && t('現有價格是 {0}，和需求的單位不同，請補一筆「{1}」的價格', [label, unitLabel(row.totalUnit)])}
-                                            {status === 'no-amount' && t('沒有明確數量或單位，無法估價')}
+                                            {status === 'unit-mismatch' && t('現有價格是 {0}，單位和需求不同，填這項的總額就好', [label])}
+                                            {status === 'no-amount' && t('沒有明確數量，採買時再記實付金額')}
                                           </span>
                                         )}
                                       </div>
@@ -6388,7 +6516,7 @@ function App() {
                                             setBudgetSavedMessage('')
                                             setBudgetOpenKey(isOpen ? null : key)
                                             setBudgetForm(
-                                              !isOpen && findPriceEntries(row.ingredient, effectivePriceBook).length === 0
+                                              !isOpen && status !== 'priced'
                                                 ? budgetFormFor(budgetRow, store)
                                                 : null,
                                             )
@@ -6420,11 +6548,8 @@ function App() {
             const assignedItemCount = storeStats.reduce((sum, { stats }) => sum + stats.total, 0)
             const purchasedCount = storeStats.reduce((sum, { stats }) => sum + stats.purchased, 0)
             const spentTotal = storeStats.reduce((sum, { stats }) => sum + stats.spent, 0)
-            const estimatedTotal =
-              storeStats.reduce((sum, { stats }) => sum + stats.estimated, 0) +
-              shoppingIngredientOverviewRows
-                .filter((row) => !row.assignedStoreId)
-                .reduce((sum, row) => sum + (row.suggestion.estimate?.cost ?? 0), 0)
+            // The same number as the budget page.
+            const estimatedTotal = shoppingIngredientOverviewRows.reduce((sum, row) => sum + describeBudgetRow(row).cost, 0)
             const purchasedWithoutPrice = shoppingStores.reduce(
               (sum, store) =>
                 sum +
@@ -6622,7 +6747,7 @@ function App() {
                                       onChange={(value) => {
                                         if (value.startsWith('new:')) {
                                           assignIngredientToNewStore(row.ingredient, value.slice(4))
-                                        } else {
+                                        } else if (value || confirmUnassign(row.ingredient)) {
                                           assignIngredientToStore(row.ingredient, value ? Number(value) : null)
                                         }
                                       }}
@@ -6670,7 +6795,7 @@ function App() {
                 )}
 
                 {storeStats.map(({ store, stats }) => (
-                  <section key={store.id} className="card store-card">
+                  <section key={store.id} className={`card store-card ${store.items.length === 0 ? 'is-empty' : ''}`}>
                     <header className="card-head">
                       <span className="store-icon" aria-hidden="true">
                         <Icon name="cart" size={16} />
@@ -6684,7 +6809,11 @@ function App() {
                         placeholder={t('商店名稱')}
                         aria-label={t('商店名稱')}
                       />
-                      <span className={`chip ${stats.total > 0 && stats.purchased === stats.total ? 'chip-ok' : ''}`}>{t('已買 {0}/{1}', [stats.purchased, stats.total])}</span>
+                      {store.items.length === 0 ? (
+                        <span className="muted small">{t('還沒有食材')}</span>
+                      ) : (
+                        <span className={`chip ${stats.total > 0 && stats.purchased === stats.total ? 'chip-ok' : ''}`}>{t('已買 {0}/{1}', [stats.purchased, stats.total])}</span>
+                      )}
                       <div className="store-head-actions">
                         <button
                           type="button"
@@ -6797,7 +6926,7 @@ function App() {
                                     )}
                                     {row && (
                                       <span className="shop-note">
-                                        {row.groupNeeds.map((need) => need.groupName).join(listSeparator)}
+                                        {groupNamesFor(item.ingredient)}
                                         {row.note && ` · ${noteLabel(row.note)}`}
                                       </span>
                                     )}
@@ -7011,6 +7140,9 @@ function App() {
               {marketPrices && marketPrices.errors.length > 0 && (
                 <details className="price-errors">
                   <summary>{t('{0} 項沒有更新成功', [marketPrices.errors.length])}</summary>
+                  {marketPrices.errors.some((error) => error.includes('403')) && (
+                    <p className="muted small">{t('（403）代表該商店的網站不接受從伺服器來的連線，所以這些價格不會自動更新，會維持表格裡的數字，需要時請手動修改。')}</p>
+                  )}
                   <ul>
                     {marketPrices.errors.map((error) => (
                       <li key={error}>{error}</li>
@@ -7350,7 +7482,7 @@ function App() {
                               </span>
                               {Boolean(row?.note || row?.groupNeeds.length) && (
                                 <span className="shop-mode-note">
-                                  {[row?.note && noteLabel(row.note), row?.groupNeeds.map((need) => need.groupName).join(listSeparator)].filter(Boolean).join(' · ')}
+                                  {[row?.note && noteLabel(row.note), groupNamesFor(item.ingredient)].filter(Boolean).join(' · ')}
                                 </span>
                               )}
                             </button>

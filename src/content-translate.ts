@@ -96,7 +96,7 @@ const PHRASES: Record<string, string> = {
   越式: 'Vietnamese', 德式: 'German', 英式: 'British', 歐洲: 'European', 歐式: 'European', 西式: 'Western', 南洋: 'Southeast Asian', 東南亞: 'Southeast Asian',
   印度: 'Indian', 墨西哥: 'Mexican', 西班牙: 'Spanish', 希臘: 'Greek', 創意料理: 'Fusion', 無國界: 'Fusion', 融合: 'Fusion',
   // Price notes
-  小時達: 'PX Hour Delivery', 秤重: 'by weight', 單顆: 'single', 整顆: 'whole', 一顆約: 'one is about', 一盒約: 'one box is about', 一包約: 'one pack is about',
+  估計總額: 'estimated total', 小時達: 'PX Hour Delivery', 秤重: 'by weight', 單顆: 'single', 整顆: 'whole', 一顆約: 'one is about', 一盒約: 'one box is about', 一包約: 'one pack is about',
   一小把: 'a small bunch', 夏季可能大漲: 'may rise sharply in summer', 約一台斤: 'about 1 jin', 一斤: 'per jin', 盒裝約: 'box of about', 袋裝約: 'bag of about', 盒裝: 'boxed',
   袋裝: 'bagged', 元不等: ' NT$ depending on the product', '紅／黃椒': 'red/yellow pepper', 豆腐攤: 'tofu stall', 蛋行: 'egg shop', 鮮乳: 'fresh milk', 條狀: 'stick',
   動物性: 'dairy', 片裝: 'slice pack', 披薩用: 'for pizza', 原味: 'plain', 精鹽: 'refined salt', 沙拉油: 'salad oil', 一條: 'one loaf', 半條: 'half loaf', 全脂: 'whole',

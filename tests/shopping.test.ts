@@ -5,6 +5,7 @@ import {
   categorizeIngredient,
   computeStoreStats,
   dedupeStoreItems,
+  sharePack,
   splitEstimateByGroup,
   estimateWithEntry,
   storeKindOf,
@@ -30,7 +31,7 @@ test('units convert to a shared base', () => {
   assert.deepEqual(toMeasure(2, 'L'), { dimension: 'volume', value: 2000 })
   assert.deepEqual(toMeasure(3, '個'), { dimension: 'count:顆', value: 3 })
   assert.equal(toMeasure(0, 'g'), null)
-  assert.equal(toMeasure(2, ''), null)
+  assert.deepEqual(toMeasure(2, ''), { dimension: 'count:', value: 2 })
 })
 
 test('estimates round up to whole packs, loose items are proportional', () => {
@@ -150,4 +151,36 @@ test('an estimate nobody asked for stays unallocated', () => {
   const { byGroup, unallocated } = splitEstimateByGroup([{ cost: 80, shares: [{ groupId: 'a', qty: 0 }] }])
   assert.equal(byGroup.size, 0)
   assert.equal(unallocated, 80)
+})
+
+test('weight and volume are compared as 1 g to 1 ml, but an exact unit wins', () => {
+  const perLiter: PriceEntry = { id: 1, ingredient: '醬油', store: '全聯', price: '75', packQty: '1000', packUnit: 'ml', spec: '' }
+  const estimate = estimateWithEntry(25, 'g', perLiter)
+  assert.equal(estimate?.cost, 75)
+  assert.equal(estimate?.approx, true)
+  assert.equal(estimateWithEntry(25, 'ml', perLiter)?.approx, undefined)
+  assert.equal(estimateWithEntry(2, '顆', perLiter), null)
+  const perGram: PriceEntry = { ...perLiter, id: 2, price: '90', packQty: '500', packUnit: 'g' }
+  assert.equal(suggestPurchase('醬油', 25, 'g', [perLiter, perGram]).estimate?.entry.id, 2)
+})
+
+test('a total for the amount needed scales when the amount changes', () => {
+  const total: PriceEntry = { id: 1, ingredient: '白蘿蔔', store: '菜市場', price: '80', packQty: '2', packUnit: '條', spec: '估計總額', loose: true }
+  assert.equal(estimateWithEntry(2, '條', total)?.cost, 80)
+  assert.equal(estimateWithEntry(3, '條', total)?.cost, 120)
+  const noUnit: PriceEntry = { ...total, packQty: '3', packUnit: '' }
+  assert.equal(estimateWithEntry(3, '', noUnit)?.cost, 80)
+  assert.equal(estimateWithEntry(3, '顆', noUnit), null)
+})
+
+test('two units of one ingredient share a pack instead of buying two', () => {
+  const oil: PriceEntry = { id: 1, ingredient: '橄欖油', store: 'Costco', price: '599', packQty: '3', packUnit: 'l', spec: '' }
+  const first = estimateWithEntry(180, 'g', oil)
+  const second = estimateWithEntry(205, 'ml', oil)
+  assert.ok(first && second)
+  assert.equal(first.cost + sharePack(second, first.ratio).cost, 599)
+  const big = estimateWithEntry(2900, 'ml', oil)
+  assert.ok(big)
+  assert.equal(sharePack(big, first.ratio).cost, 599)
+  assert.equal(sharePack(second, 0).cost, 599)
 })
