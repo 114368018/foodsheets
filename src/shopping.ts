@@ -147,8 +147,8 @@ export const storeKindOf = (storeName: string): StoreKind | null => {
 }
 
 // ---------- Units ----------
-const WEIGHT_UNITS: Record<string, number> = { g: 1, 克: 1, 公克: 1, kg: 1000, 公斤: 1000, 斤: 600, 台斤: 600, jin: 600, 兩: 37.5 }
-const VOLUME_UNITS: Record<string, number> = { ml: 1, cc: 1, 毫升: 1, l: 1000, 公升: 1000, 升: 1000, 大匙: 15, 湯匙: 15, 小匙: 5, 茶匙: 5 }
+const WEIGHT_UNITS: Record<string, number> = { mg: 0.001, 毫克: 0.001, g: 1, 克: 1, 公克: 1, kg: 1000, 公斤: 1000, 斤: 600, 台斤: 600, jin: 600, 兩: 37.5 }
+const VOLUME_UNITS: Record<string, number> = { ml: 1, cc: 1, 毫升: 1, l: 1000, 公升: 1000, 升: 1000, 大匙: 15, 湯匙: 15, 匙: 15, 小匙: 5, 茶匙: 5, 杯: 240, 量杯: 240, cup: 240, cups: 240 }
 const COUNT_ALIASES: Record<string, string> = {
   個: '顆',
   粒: '顆',

@@ -60,7 +60,9 @@ import {
   chineseRuns,
   machineChunks,
   polishMachineEnglish,
-  textKey,
+  adminTextKey,
+  automaticTranslation,
+  machineTextKey,
   translateChineseRuns,
   translateLine,
   translateText,
@@ -2232,8 +2234,17 @@ function App() {
   const groupNamesFor = (name: string) =>
     Array.from(new Set(findOverviewRows(name).flatMap((row) => row.groupNeeds.map((need) => need.groupName)))).join(listSeparator)
 
+  // An amount in the unit the store sells by: the wet market weighs produce in 台斤, so 4950 g reads
+  // "8.3 斤（4.95 kg）" there. Small amounts and other stores keep g / kg. English always uses metric.
+  const storeAmount = (value: number, unit: string, storeName: string) => {
+    if (lang !== 'en' && unit === 'g' && value >= 300 && storeKindOf(storeName) === '菜市場') {
+      return `${Math.round((value / 600) * 10) / 10} 斤（${formatQuantity(value, 'g')}）`
+    }
+    return formatQuantity(value, unit)
+  }
+
   // What is still to buy for a store item, e.g. "4 顆", or "6 顆 + 300 g" when units differ.
-  const describeNeed = (name: string, ownedQty: string) => {
+  const describeNeed = (name: string, ownedQty: string, storeName = '') => {
     const rows = findOverviewRows(name)
     if (rows.length === 0) {
       return null
@@ -2248,13 +2259,13 @@ function App() {
     if (rows.length === 1) {
       const remaining = Math.max(rows[0].requiredTotal - toNumber(ownedQty), 0)
       return {
-        need: amountLabel(rows[0].requiredDisplay),
-        remaining: amountLabel(formatQuantity(remaining, rows[0].totalUnit)),
+        need: amountLabel(storeAmount(rows[0].requiredTotal, rows[0].totalUnit, storeName)),
+        remaining: amountLabel(storeAmount(remaining, rows[0].totalUnit, storeName)),
         mixed: false,
       }
     }
 
-    const text = amountLabel(rows.map((row) => row.requiredDisplay).join(' + '))
+    const text = amountLabel(rows.map((row) => storeAmount(row.requiredTotal, row.totalUnit, storeName)).join(' + '))
     return { need: text, remaining: text, mixed: true }
   }
 
@@ -2275,13 +2286,17 @@ function App() {
     )
   })
 
+  // "10顆" / "斤" in Chinese, "10 pcs" / "600 g" in English.
+  const packLabel = (entry: PriceEntry) =>
+    lang === 'en' ? amountLabel(`${entry.packQty && entry.packQty !== '1' ? entry.packQty : ''}${entry.packUnit}`) : formatPack(entry)
+
   const estimateLabel = (estimate: Estimate): string =>
     // Nothing extra to buy: the ingredient's other amount already pays for this pack.
     !estimate.entry.loose && estimate.packs === 0
       ? t('和這項食材的另一筆合買，不另計')
       : t('參考 ${0}/{1}{2}', [
       estimate.entry.price,
-      formatPack({ ...estimate.entry, packUnit: unitLabel(estimate.entry.packUnit) }),
+      packLabel(estimate.entry),
       estimate.entry.loose ? '' : ` × ${estimate.packs}`,
     ]) + (estimate.approx ? t('（以 1 g ≈ 1 ml 概算）') : '')
 
@@ -2396,7 +2411,7 @@ function App() {
         (entry) => Number(entry.price) > 0 && (entry.store === store || (kind !== null && storeKindOf(entry.store) === kind)),
       )
       return atStore
-        ? { ...base, status: 'unit-mismatch', label: `${storeLabel(atStore.store)} $${atStore.price}/${formatPack({ ...atStore, packUnit: unitLabel(atStore.packUnit) })}` }
+        ? { ...base, status: 'unit-mismatch', label: `${storeLabel(atStore.store)} $${atStore.price}/${packLabel(atStore)}` }
         : { ...base, status: 'no-store-price' }
     }
 
@@ -2409,7 +2424,7 @@ function App() {
     }
     const known = references.find((entry) => Number(entry.price) > 0)
     return known
-      ? { ...base, status: 'unit-mismatch', label: `${storeLabel(known.store)} $${known.price}/${formatPack({ ...known, packUnit: unitLabel(known.packUnit) })}` }
+      ? { ...base, status: 'unit-mismatch', label: `${storeLabel(known.store)} $${known.price}/${packLabel(known)}` }
       : { ...base, status: 'no-price' }
   }
 
@@ -2595,7 +2610,7 @@ function App() {
               {entry.id < 0 ? (
                 <>
                   <span className="budget-price-readonly">
-                    {storeLabel(entry.store)} ${entry.price}/{formatPack({ ...entry, packUnit: unitLabel(entry.packUnit) })}
+                    {storeLabel(entry.store)} ${entry.price}/{packLabel(entry)}
                     <span className="muted small"> {t('每日市場行情')}</span>
                   </span>
                   <button type="button" className="btn btn-ghost btn-sm" onClick={() => makePriceEditable(entry)}>
@@ -3838,7 +3853,7 @@ function App() {
             }
           }
           if (parts.length === machineChunks(text).length) {
-            results[textKey(text)] = parts.join(' ')
+            results[machineTextKey(text)] = parts.join(' ')
           }
         }
         if (Object.keys(results).length > 0) {
@@ -4134,7 +4149,7 @@ function App() {
       lines.push('', `▍${t(category || '其他')}`)
       sectionItems.forEach((item) => {
         const row = findOverview(item.ingredient)
-        const amount = describeNeed(item.ingredient, item.ownedQty ?? '')?.remaining ?? ''
+        const amount = describeNeed(item.ingredient, item.ownedQty ?? '', store.storeName)?.remaining ?? ''
         const note = row?.note ? (lang === 'en' ? ` (${noteLabel(row.note)})` : `（${row.note}）`) : ''
         lines.push(`${item.purchased ? '☑' : '☐'} ${bilingualIngredient(item.ingredient)} ${amount}${note}`.trim())
       })
@@ -4842,9 +4857,9 @@ function App() {
           ) : (
             <div className="content-translation-list">
               {contentSources.map(({ text, kind }) => {
-                const key = textKey(text)
+                const key = adminTextKey(text)
                 const saved = textTranslations[key]
-                const automatic = translateLine(text, {})
+                const automatic = automaticTranslation(text, textTranslations)
                 return (
                   <label key={text} className="content-translation-row">
                     <span className="content-translation-source">
@@ -5384,10 +5399,10 @@ function App() {
                                           aria-label={t('總量（數字加單位，例如 6顆）')}
                                           aria-invalid={isInvalid}
                                         />
-                                        {amountConcern(row.totalQty, row.totalUnit) === 'no-unit' && (
+                                        {amountConcern(row.totalQty, row.totalUnit, row.ingredient) === 'no-unit' && (
                                           <span className="cell-hint">{t('沒填單位（例如 g、顆）')}</span>
                                         )}
-                                        {amountConcern(row.totalQty, row.totalUnit) === 'milligram' && (
+                                        {amountConcern(row.totalQty, row.totalUnit, row.ingredient) === 'milligram' && (
                                           <span className="cell-hint">{t('毫克是千分之一克，是不是要填「克」？')}</span>
                                         )}
                                       </td>
@@ -5853,7 +5868,7 @@ function App() {
                         <td>{row.perServingMixed ? '' : unitLabel(row.perServingUnit)}</td>
                         <td className="num">
                           {formatNumber(row.sumTotalQty)}
-                          {row.vagueAmounts.length > 0 && <span className="merged-from">{t('另有：{0}', [row.vagueAmounts.join(listSeparator)])}</span>}
+                          {row.vagueAmounts.length > 0 && <span className="merged-from">{t('另有：{0}', [row.vagueAmounts.map(amountLabel).join(listSeparator)])}</span>}
                         </td>
                         <td className="num">
                           <input
@@ -6884,7 +6899,7 @@ function App() {
                             <p className="shop-category">{category ? t(category) : t('未對應到食材總表')}</p>
                             {items.map((item) => {
                               const row = findOverview(item.ingredient)
-                              const need = describeNeed(item.ingredient, item.ownedQty ?? '')
+                              const need = describeNeed(item.ingredient, item.ownedQty ?? '', store.storeName)
                               const estimate = estimateItemAtStore(item, store.storeName)
 
                               return (
@@ -6945,7 +6960,7 @@ function App() {
                                       onChange={(event) =>
                                         updateShoppingStoreItem(store.id, item.id, 'ownedQty', event.target.value)
                                       }
-                                      placeholder="0"
+                                      placeholder={row ? `0 ${unitLabel(row.totalUnit)}` : '0'}
                                       aria-label={t('家中已有')}
                                       disabled={!need || need.mixed}
                                     />
@@ -7457,7 +7472,7 @@ function App() {
                       <h4>{category ? t(category) : t('其他（不在食材總表）')}</h4>
                       {categoryItems.map((item) => {
                         const row = findOverview(item.ingredient)
-                        const need = describeNeed(item.ingredient, item.ownedQty ?? '')
+                        const need = describeNeed(item.ingredient, item.ownedQty ?? '', store.storeName)
                         const estimate = estimateItemAtStore(item, store.storeName)
                         const toggle = () => updateShoppingStoreItem(store.id, item.id, 'purchased', !item.purchased)
 

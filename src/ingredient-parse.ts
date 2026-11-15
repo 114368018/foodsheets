@@ -102,7 +102,13 @@ export const countedAmount = (qty: string, unit: string): { qty: string; unit: s
 }
 
 // Something to point out about a typed amount, or '' when it looks fine.
-export const amountConcern = (qty: string, unit: string): 'no-unit' | 'milligram' | '' => {
+// Seasonings: salt, sugar, sauces, spices, yeast and the like, in Chinese or English.
+const SEASONING = /(鹽|糖|胡椒|椒粉|孜然|肉桂|香料|咖[哩喱]|味精|醬|醋|蜂蜜|酵母|香草)|salt|sugar|pepper|sauce|spice|powder|honey|vinegar|yeast/i
+export const isSeasoning = (name: string): boolean => SEASONING.test(name)
+
+// Milligrams are counted as written (1000 毫克 = 1 g). Seasonings can really be that little, so only
+// other ingredients (butter, vegetables, beans…) get a "did you mean grams?" hint.
+export const amountConcern = (qty: string, unit: string, ingredient = ''): 'no-unit' | 'milligram' | '' => {
   if (rowAmount(qty, unit).kind !== 'number') {
     return ''
   }
@@ -110,7 +116,7 @@ export const amountConcern = (qty: string, unit: string): 'no-unit' | 'milligram
   if (!text) {
     return 'no-unit'
   }
-  return /^(毫克|mg)/.test(text) ? 'milligram' : ''
+  return /^(毫克|mg)/.test(text) && !isSeasoning(ingredient) ? 'milligram' : ''
 }
 
 export const parseIngredientLine = (line: string): ParsedIngredient | null => {

@@ -129,6 +129,7 @@ export type UnitInfo = {
 }
 
 const UNIT_TABLE: Array<[string[], string, number, UnitInfo['dimension']]> = [
+  [['mg', '毫克', 'milligram', 'milligrams'], 'g', 0.001, 'weight'],
   [['g', 'gram', 'grams', 'gm', '克', '公克'], 'g', 1, 'weight'],
   [['kg', 'kgs', 'kilogram', 'kilograms', '公斤', '千克'], 'g', 1000, 'weight'],
   [['斤', '台斤'], 'g', 600, 'weight'],
@@ -137,6 +138,10 @@ const UNIT_TABLE: Array<[string[], string, number, UnitInfo['dimension']]> = [
   [['l', 'liter', 'liters', 'litre', 'litres', '公升', '升'], 'ml', 1000, 'volume'],
   [['大匙', '湯匙', 'tbsp', 'tablespoon', 'tablespoons'], 'ml', 15, 'volume'],
   [['小匙', '茶匙', 'tsp', 'teaspoon', 'teaspoons'], 'ml', 5, 'volume'],
+  // A plain 匙 in a recipe is a tablespoon; a 杯 is a 240 ml measuring cup.
+  [['匙'], 'ml', 15, 'volume'],
+  [['杯', 'cup', 'cups', '量杯'], 'ml', 240, 'volume'],
+  [['人份', '人分', 'serving', 'servings'], '人份', 1, 'count'],
   [['顆', '個', '粒', '入', 'pc', 'pcs', 'piece', 'pieces', 'ea', 'each'], '顆', 1, 'count'],
   [['條', '根'], '條', 1, 'count'],
   [['包', '袋', 'pack', 'packs', 'bag', 'bags'], '包', 1, 'count'],

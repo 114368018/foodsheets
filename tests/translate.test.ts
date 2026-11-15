@@ -65,6 +65,11 @@ test('one-word spellings and names typed in English', () => {
 
 test('amounts in English', () => {
   assert.equal(amountToEnglish('3顆'), '3 pcs')
+  assert.equal(amountToEnglish('1斤'), '600 g')
+  assert.equal(amountToEnglish('8.3 斤'), '4.98 kg')
+  assert.equal(amountToEnglish('2兩'), '75 g')
+  assert.equal(amountToEnglish('斤'), '600 g')
+  assert.equal(amountToEnglish('5人分'), '5 servings')
   assert.equal(amountToEnglish('1小撮'), '1 pinch')
   assert.equal(amountToEnglish('2 小撮'), '2 pinches')
   assert.equal(amountToEnglish('4根(大)'), '4 pcs (large)')

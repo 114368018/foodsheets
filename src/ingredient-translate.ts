@@ -72,6 +72,13 @@ export const BUILTIN_ZH_EN: Record<string, string> = {
   火鍋用王子麵: 'Instant noodles for hot pot', 筆管麵: 'Penne', 鹽巴: 'Salt', 蛋液: 'Beaten egg', 義大利香料: 'Italian seasoning', 羅勒葉: 'Basil leaves',
   玫瑰鹽: 'Pink salt', 山東白菜: 'Napa cabbage (Shandong)', 杏桃果醬: 'Apricot jam', 'Hillfield茄汁焗豆': 'Hillfield baked beans in tomato sauce',
   紅椒粉酌量: 'Paprika, to taste', 二砂糖: 'Light brown sugar', 糖: 'Sugar', 黑胡椒粒: 'Black peppercorns', 起司條: 'Cheese sticks', 迷你莫札瑞拉起司: 'Mini mozzarella',
+  抹茶粉: 'Matcha powder', 結球萵苣: 'Iceberg lettuce', 結球萬苣: 'Iceberg lettuce', 素食熱狗: 'Vegetarian hot dogs', 高筋粉: 'Bread flour',
+  细砂糖: 'Caster sugar', 溫熱牛奶: 'Warm milk', 耐高糖酵母: 'Sugar-tolerant yeast', 溫熱水: 'Warm water', 營養酵母: 'Nutritional yeast',
+  煙燻紅椒粉: 'Smoked paprika', 罐頭番茄糊: 'Canned tomato paste', 孜然粉: 'Ground cumin', 罐頭紅腰豆: 'Canned red kidney beans', 糙米: 'Brown rice',
+  香菜葉: 'Cilantro leaves', 羽衣甘藍: 'Kale', 蘋果醋: 'Apple cider vinegar', 台式香菇栗子素油飯: 'Taiwanese vegetarian sticky rice with shiitake and chestnuts',
+  在來米粉: 'Rice flour', 綠茶粉: 'Green tea powder', 草莓果醬: 'Strawberry jam', 味霖: 'Mirin', 海苔: 'Nori', 照燒汁: 'Teriyaki sauce',
+  青豆仁: 'Green peas', 生栗子: 'Raw chestnuts', 老薑片: 'Mature ginger slices', 胡椒: 'Pepper', 長糯米: 'Long-grain glutinous rice',
+  吐司: 'Sliced bread', 白砂糖: 'White sugar', 植物油: 'Vegetable oil', 胡蘿蔔: 'Carrot', 櫻花粉: 'Sakura powder',
   // Names that composing from parts would get wrong (紅糖 is not "red sugar").
   紅糖: 'Brown sugar', 黑醋: 'Black vinegar', 白胡椒: 'White pepper', 黑芝麻: 'Black sesame', 大蒜: 'Garlic',
   小麥: 'Wheat', 白飯: 'Cooked rice', 乾辣椒: 'Dried chili', 小米: 'Millet', 大豆: 'Soybeans', 白木耳: 'White fungus',
@@ -180,6 +187,14 @@ const MACHINE_MISTAKES: Record<string, string> = {
   'zh:二砂糖': 'Two granulated sugar',
   'zh:百里香粉': 'Thyme powder',
   'zh:絞肉': 'Ground meat',
+  'zh:在來米粉': 'Rice noodles in',
+  'zh:短竹籤': 'Short toothpick',
+  'zh:羽衣甘藍': 'Kale/ collard greens',
+  'zh:結球萬苣': 'Cabbage lettuce',
+  'zh:青豆仁': 'Green bean kernels',
+  'zh:老薑片': 'Sliced old ginger',
+  'zh:胡椒': 'Black pepper',
+  'zh:高筋粉': 'Bread flour',
 }
 
 // What is saved for a name, ignoring machine results known to be wrong.
@@ -276,7 +291,7 @@ export const BUILTIN_TOOL_ZH_EN: Record<string, string> = {
   量匙: 'Measuring spoons', 電子秤: 'Kitchen scale', 溫度計: 'Thermometer', 計時器: 'Timer', 裱花袋: 'Piping bag',
   噴槍: 'Kitchen torch', 隔熱手套: 'Oven mitts', 手套: 'Gloves', 鋁箔紙: 'Aluminum foil', 烘焙紙: 'Baking paper',
   保鮮膜: 'Plastic wrap', 廚房紙巾: 'Paper towels', 竹籤: 'Skewers', 牙籤: 'Toothpicks', 抹布: 'Dish cloth',
-  菜瓜布: 'Scrub sponge', 延長線: 'Extension cord', 托盤: 'Tray', 瓦斯罐: 'Gas canister', 卡式瓦斯罐: 'Gas canister',
+  菜瓜布: 'Scrub sponge', 延長線: 'Extension cord', 托盤: 'Tray', 瓦斯罐: 'Gas canister', 卡式瓦斯罐: 'Gas canister', 熱水壺: 'Kettle', 短竹籤: 'Short bamboo skewers',
   // Single base words, so names like 瓷鍋 or 紙碗 can be put together from their parts.
   鍋: 'Pot', 盤: 'Plate', 碟子: 'Small plate', 碟: 'Small plate', 杯: 'Cup', 刀: 'Knife', 盆: 'Basin', 匙: 'Spoon',
   鏟: 'Spatula', 鏟子: 'Spatula', 勺: 'Ladle', 勺子: 'Ladle', 籃: 'Basket', 籃子: 'Basket', 架: 'Rack', 架子: 'Rack',
@@ -324,12 +339,12 @@ export const cleanMachineTranslation = (source: string, result: string, toEnglis
 const COUNT = ['pc', 'pcs'] as const
 const UNIT_EN: Array<[string, string, string?]> = [
   ['公斤', 'kg'], ['千克', 'kg'], ['公克', 'g'], ['毫升', 'ml'], ['公升', 'L'], ['大匙', 'tbsp'], ['湯匙', 'tbsp'], ['小匙', 'tsp'], ['茶匙', 'tsp'],
-  ['台斤', 'jin'], ['小撮', 'pinch', 'pinches'], ['小包', 'small pack', 'small packs'], ['小把', 'small bunch', 'small bunches'],
+  ['台斤', '600 g'], ['毫克', 'mg'], ['人份', 'serving', 'servings'], ['人分', 'serving', 'servings'], ['小撮', 'pinch', 'pinches'], ['小包', 'small pack', 'small packs'], ['小把', 'small bunch', 'small bunches'],
   ['人份', 'serving', 'servings'], ['撮', 'pinch', 'pinches'], ['顆', ...COUNT], ['個', ...COUNT], ['粒', ...COUNT], ['入', ...COUNT], ['條', ...COUNT],
   ['根', ...COUNT], ['支', ...COUNT], ['朵', ...COUNT], ['隻', ...COUNT], ['尾', ...COUNT], ['台', 'unit', 'units'], ['把', 'bunch', 'bunches'],
   ['束', 'bunch', 'bunches'], ['包', 'pack', 'packs'], ['袋', 'bag', 'bags'], ['片', 'slice', 'slices'], ['張', 'sheet', 'sheets'], ['盒', 'box', 'boxes'],
   ['瓶', 'bottle', 'bottles'], ['罐', 'can', 'cans'], ['塊', 'block', 'blocks'], ['杯', 'cup', 'cups'], ['碗', 'bowl', 'bowls'], ['匙', 'spoon', 'spoons'],
-  ['滴', 'drop', 'drops'], ['份', 'serving', 'servings'], ['克', 'g'], ['斤', 'jin'], ['兩', 'liang'], ['升', 'L'],
+  ['滴', 'drop', 'drops'], ['份', 'serving', 'servings'], ['克', 'g'], ['斤', '600 g'], ['兩', '37.5 g'], ['升', 'L'],
 ]
 const UNIT_EN_MAP = new Map(UNIT_EN.map(([zh, singular, plural]) => [zh, { singular, plural: plural ?? singular }]))
 const UNIT_PATTERN = UNIT_EN.map(([zh]) => zh).join('|')
@@ -362,13 +377,30 @@ const cleanWords = (text: string): string => {
     .trim()
 }
 
-export const amountToEnglish = (text: string): string =>
-  cleanWords(
-    text.replace(AMOUNT_UNIT, (_match, qty: string, unit: string) => {
+// A Taiwanese 斤 is 600 g and a 兩 37.5 g; "jin" would mean nothing to most English readers (and a
+// mainland jin is 500 g), so these become grams.
+const TAIWAN_WEIGHTS: Record<string, number> = { 斤: 600, 台斤: 600, 兩: 37.5 }
+const grams = (value: number) =>
+  value >= 1000 ? `${Math.round(value / 10) / 100} kg` : `${Math.round(value * 10) / 10} g`
+
+export const amountToEnglish = (text: string): string => {
+  const trimmed = text.trim()
+  // A unit on its own, as in a price per 斤.
+  if (trimmed && UNIT_EN_MAP.has(trimmed)) {
+    return unitToEnglish(trimmed)
+  }
+  return cleanWords(
+    text.replace(AMOUNT_UNIT, (match, qty: string, unit: string) => {
+      const factor = TAIWAN_WEIGHTS[unit]
+      const value = Number(qty.replace(/,/g, ''))
+      if (factor && Number.isFinite(value)) {
+        return grams(value * factor)
+      }
       const english = UNIT_EN_MAP.get(unit)
-      return `${qty} ${Number(qty) === 1 ? english?.singular : english?.plural}`
+      return english ? `${qty} ${Number(qty) === 1 ? english.singular : english.plural}` : match
     }),
   )
+}
 
 // A unit on its own, as in a table's unit column.
 export const unitToEnglish = (unit: string): string =>

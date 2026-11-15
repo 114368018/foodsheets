@@ -1,5 +1,12 @@
 // English release notes, in the same order as CHANGELOG_ENTRIES (a test keeps the two in step).
 export const CHANGELOG_EN: Record<string, string[]> = {
+  'v2.12.0': [
+    'One unit per kind: each group\'s amounts are converted as written before they are added up (weight to g, volume to ml), now including milligrams, cups (240 ml), spoons (tablespoon, 15 ml) and servings. Seasonings (salt, sugar, sauces, spices…) can be in milligrams; other ingredients in milligrams get a "did you mean grams?" hint.',
+    'Shopping uses the units stores sell by: at the wet market, amounts of 300 g or more show in Taiwanese jin, such as "8.3 斤 (4.95 kg)"; other stores keep g / kg. The "have at home" field shows which unit to use.',
+    'In English, jin and liang become grams (1 斤 → 600 g), and prices read "$35/600 g" instead of an unfamiliar "jin".',
+    'Hand-written translations for the steps, dish names, notes and ingredient names groups added (75 lines), fixes for names the machine got wrong (such as rice flour and short bamboo skewers), and English names for custom stores.',
+    'Translation priority is now: corrections an admin makes on the Translations page, then hand-written translations, then machine translation, so machine results no longer replace hand-written ones.',
+  ],
   'v2.11.0': [
     'Simpler estimates: to add a price, enter one number, "about how much in total for this item". No store or unit needed; people who know the unit price can still enter price and pack. When groups change amounts later, the estimate scales with them.',
     'More ingredients are estimated automatically: weight and volume are compared as 1 g ≈ 1 ml (25 g of soy sauce against a 1000 ml bottle price, for example), marked as approximate.',

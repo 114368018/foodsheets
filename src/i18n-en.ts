@@ -1,6 +1,7 @@
 // English for every Chinese UI string. Keys must match the Chinese text exactly.
 // After changing UI text, run: npm run i18n:check
 export const EN: Record<string, string> = {
+  '毫克是千分之一克，是不是要填「克」？': 'A milligram is 1/1000 of a gram. Did you mean grams?',
   '這一頁是填寫範例，只能看。請從「{0}」選單點自己的組別開始填，填的內容會自動儲存。': 'This page is a read-only example. Pick your own group from the "{0}" menu to start; everything you enter is saved automatically.',
   '（以 1 g ≈ 1 ml 概算）': ' (taking 1 g ≈ 1 ml)',
   '{0} 總共大約多少錢？': 'About how much for {0} in total?',
@@ -9,7 +10,6 @@ export const EN: Record<string, string> = {
   '改填總額就好': 'Just enter the total instead',
   '沒有明確數量，採買時再記實付金額': 'No clear amount; record what you pay when shopping',
   '沒填單位（例如 g、顆）': 'No unit (such as g or pcs)',
-  '毫克是千分之一克，是不是要填「克」？': 'A milligram is 1/1000 of a gram. Did you mean grams?',
   '必填，如 6顆、適量': 'Required, e.g. 6 pcs or "as needed"',
   '還沒有食材': 'No ingredients yet',
   '（403）代表該商店的網站不接受從伺服器來的連線，所以這些價格不會自動更新，會維持表格裡的數字，需要時請手動修改。': '(403) means the shop\'s website refuses connections from the server, so these prices are not updated automatically. They keep the numbers in the table; change them by hand when needed.',

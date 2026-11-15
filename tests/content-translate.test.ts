@@ -4,6 +4,8 @@ import {
   machineChunks,
   phraseToEnglish,
   polishMachineEnglish,
+  adminTextKey,
+  machineTextKey,
   textKey,
   translateChineseRuns,
   translateLine,
@@ -19,8 +21,11 @@ test('steps translate line by line and keep their line breaks', () => {
   assert.equal(translateText(steps, {}), 'Wash the tomatoes and cut them into small cubes.\n\nRemove and set aside.')
 })
 
-test('saved translations come first, and unknown lines wait for the machine', () => {
-  assert.equal(translateLine('盛起備用。', { [textKey('盛起備用。')]: 'Set aside.' }), 'Set aside.')
+test('admin corrections come first, machine results last, and unknown lines wait for the machine', () => {
+  assert.equal(translateLine('盛起備用。', { [adminTextKey('盛起備用。')]: 'Set aside.' }), 'Set aside.')
+  assert.equal(translateLine('盛起備用。', { [machineTextKey('盛起備用。')]: 'Serve up spare.' }), 'Remove and set aside.')
+  assert.equal(translateLine('盛起備用。', { [textKey('盛起備用。')]: 'Serve up spare.' }), 'Remove and set aside.')
+  assert.equal(translateLine('把麵團揉到光滑', { [machineTextKey('把麵團揉到光滑')]: 'Knead the dough smooth' }), 'Knead the dough smooth')
   assert.equal(translateLine('把麵團揉到光滑', {}), null)
   assert.deepEqual(untranslatedLines('盛起備用。\n把麵團揉到光滑\nAdd salt', {}), ['把麵團揉到光滑'])
   assert.equal(translateText('把麵團揉到光滑', {}), '把麵團揉到光滑')
@@ -44,7 +49,7 @@ test('every starting price note reads in English', () => {
 })
 
 test('leftover Chinese in an amount uses saved translations', () => {
-  assert.equal(translateChineseRuns('3 盆', { [textKey('盆')]: 'basins' }), '3 basins')
+  assert.equal(translateChineseRuns('3 盆', { [machineTextKey('盆')]: 'basins' }), '3 basins')
   assert.equal(translateChineseRuns('3 盆', {}), '3 盆')
 })
 
